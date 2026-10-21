@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { 
   AdminStats, 
@@ -52,6 +52,10 @@ const [finalistsCount, setFinalistsCount] = useState<number>(2);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  // Draft config is only (re)hydrated from the server on first load, after a
+  // successful save, or on explicit discard — never by background polling.
+  const [isDirty, setIsDirty] = useState(false);
+  const hasHydratedRef = useRef(false);
 
   // Modals
   const [selectedParticipantForHistory, setSelectedParticipantForHistory] = useState<Participant | null>(null);
@@ -73,6 +77,44 @@ const [finalistsCount, setFinalistsCount] = useState<number>(2);
     }
   };
 
+  // Copy saved event settings into the editable draft
+  const applyEventToForm = (event: ChampionshipEvent) => {
+    setEventName(event.name || "Tensor MacTober Touch Type Championship '26");
+    setEventSubtitle(event.subtitle || '60 seconds. One hour. Type your way to the top.');
+    setOrganizationName(event.organization_name || 'TENSOR');
+    setPassageText(event.passage);
+    setEventDurationMin(event.event_duration || 60);
+
+    const currentTestDur = event.test_duration || 60;
+    setTestDurationSec(currentTestDur);
+    if ([15, 30, 45, 60, 90, 120].includes(currentTestDur)) {
+      setTestDurationPreset(currentTestDur.toString());
+    } else {
+      setTestDurationPreset('custom');
+    }
+
+    setMinAccuracy(event.minimum_accuracy || 85.0);
+    setFinalistsCount(event.finalists_count || 2);
+
+    if (event.max_attempts) {
+      setMaxAttemptsMode('limited');
+      setMaxAttemptsCount(event.max_attempts);
+    } else {
+      setMaxAttemptsMode('unlimited');
+    }
+
+    hasHydratedRef.current = true;
+    setIsDirty(false);
+  };
+
+  const handleDiscardSettings = () => {
+    if (stats?.event) {
+      applyEventToForm(stats.event);
+    }
+    setSettingsError(null);
+    setSettingsMessage(null);
+  };
+
   // Fetch Stats & Participants
   const loadAdminData = async () => {
     try {
@@ -91,28 +133,8 @@ const [finalistsCount, setFinalistsCount] = useState<number>(2);
 
       if (statsData.success && statsData.stats) {
         setStats(statsData.stats);
-        setEventName(statsData.stats.event.name || "Tensor MacTober Touch Type Championship '26");
-        setEventSubtitle(statsData.stats.event.subtitle || '60 seconds. One hour. Type your way to the top.');
-        setOrganizationName(statsData.stats.event.organization_name || 'TENSOR');
-        setPassageText(statsData.stats.event.passage);
-        setEventDurationMin(statsData.stats.event.event_duration || 60);
-
-        const currentTestDur = statsData.stats.event.test_duration || 60;
-        setTestDurationSec(currentTestDur);
-        if ([15, 30, 45, 60, 90, 120].includes(currentTestDur)) {
-          setTestDurationPreset(currentTestDur.toString());
-        } else {
-          setTestDurationPreset('custom');
-        }
-
-        setMinAccuracy(statsData.stats.event.minimum_accuracy || 85.0);
-setFinalistsCount(statsData.stats.event.finalists_count || 2);
-
-        if (statsData.stats.event.max_attempts) {
-          setMaxAttemptsMode('limited');
-          setMaxAttemptsCount(statsData.stats.event.max_attempts);
-        } else {
-          setMaxAttemptsMode('unlimited');
+        if (!hasHydratedRef.current) {
+          applyEventToForm(statsData.stats.event);
         }
 
         if (statsData.stats.currentServerTime) {
@@ -158,7 +180,8 @@ setFinalistsCount(statsData.stats.event.finalists_count || 2);
         body: JSON.stringify({
           action,
           updates: {
-            durationMinutes: eventDurationMin,
+            // Use the saved duration so unsaved drafts never leak into a live event
+            durationMinutes: stats?.event.event_duration,
           },
         }),
       });
@@ -233,16 +256,24 @@ finalists_count: Number(finalistsCount),
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to save configuration.');
+        throw new Error(data.error || `Failed to save configuration (HTTP ${res.status}). Your unsaved changes are kept.`);
+      }
+
+      // Re-baseline the draft from the confirmed server response
+      if (data.event) {
+        setStats((prev) => (prev ? { ...prev, event: data.event } : prev));
+        applyEventToForm(data.event);
+      } else {
+        setIsDirty(false);
       }
 
       setSettingsMessage('Configuration saved successfully! All participants will now use these settings.');
       setTimeout(() => setSettingsMessage(null), 4000);
       loadAdminData();
     } catch (err: any) {
-      setSettingsError(err.message || 'Error saving settings');
+      setSettingsError(err.message || 'Error saving settings. Your unsaved changes are kept.');
     } finally {
       setSavingSettings(false);
     }
@@ -441,7 +472,7 @@ finalists_count: Number(finalistsCount),
         {/* Configuration & Passage Editor Form + Live Summary */}
         <div className="lg:col-span-2 space-y-6">
           <div className="p-6 rounded-3xl glass-panel border border-white/10">
-            <form onSubmit={handleSaveSettings} className="space-y-5">
+            <form onSubmit={handleSaveSettings} onChange={() => setIsDirty(true)} className="space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-white/10 gap-2">
                 <div>
                   <h3 className="text-sm font-mono uppercase tracking-wider font-bold text-white flex items-center space-x-2">
@@ -685,8 +716,23 @@ finalists_count: Number(finalistsCount),
 
               <div className="flex items-center justify-between pt-2">
                 <span className="text-[11px] text-zinc-500">
-                  {stats?.event.status === 'LIVE' ? '🔒 Locked while LIVE' : 'Click save to persist parameters across all pages'}
+                  {stats?.event.status === 'LIVE'
+                    ? '🔒 Locked while LIVE'
+                    : isDirty
+                    ? <span className="text-amber-400">● Unsaved changes</span>
+                    : 'Click save to persist parameters across all pages'}
                 </span>
+                <div className="flex items-center space-x-2">
+                {isDirty && (
+                  <button
+                    type="button"
+                    onClick={handleDiscardSettings}
+                    disabled={savingSettings}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold text-zinc-300 border border-white/10 hover:bg-white/5 transition-colors disabled:opacity-40"
+                  >
+                    DISCARD
+                  </button>
+                )}
                 <button
                   type="submit"
                   disabled={stats?.event.status === 'LIVE' || savingSettings}
@@ -695,6 +741,7 @@ finalists_count: Number(finalistsCount),
                   <Save className="w-3.5 h-3.5" />
                   <span>{savingSettings ? 'Saving...' : 'SAVE CONFIGURATION'}</span>
                 </button>
+                </div>
               </div>
             </form>
           </div>
@@ -709,32 +756,32 @@ finalists_count: Number(finalistsCount),
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs font-mono">
               <div className="p-3 rounded-xl bg-white/5 border border-white/5">
                 <span className="text-[10px] text-zinc-400 uppercase block mb-1">Event Duration</span>
-                <span className="text-sm font-bold text-white">{eventDurationMin} min</span>
+                <span className="text-sm font-bold text-white">{stats?.event.event_duration} min</span>
               </div>
 
               <div className="p-3 rounded-xl bg-white/5 border border-white/5">
                 <span className="text-[10px] text-zinc-400 uppercase block mb-1">Attempt Duration</span>
                 <span className="text-sm font-bold text-white">
-                  {testDurationPreset === 'custom' ? testDurationSec : testDurationPreset} sec
+                  {stats?.event.test_duration} sec
                 </span>
               </div>
 
               <div className="p-3 rounded-xl bg-white/5 border border-white/5">
                 <span className="text-[10px] text-zinc-400 uppercase block mb-1">Min Accuracy</span>
-                <span className="text-sm font-bold text-emerald-400">{minAccuracy}%</span>
+                <span className="text-sm font-bold text-emerald-400">{stats?.event.minimum_accuracy}%</span>
               </div>
 
               <div className="p-3 rounded-xl bg-white/5 border border-white/5">
                 <span className="text-[10px] text-zinc-400 uppercase block mb-1">Max Attempts</span>
                 <span className="text-sm font-bold text-orange-400">
-                  {maxAttemptsMode === 'limited' ? `${maxAttemptsCount} Tries` : 'Unlimited'}
+                  {stats?.event.max_attempts ? `${stats.event.max_attempts} Tries` : 'Unlimited'}
                 </span>
               </div>
 
               <div className="p-3 rounded-xl bg-white/5 border border-white/5">
                 <span className="text-[10px] text-zinc-400 uppercase block mb-1">Passage</span>
-                <span className="text-sm font-bold text-white truncate block" title={passageText}>
-                  {passageText.length} chars
+                <span className="text-sm font-bold text-white truncate block" title={stats?.event.passage}>
+                  {stats?.event.passage.length ?? 0} chars
                 </span>
               </div>
 
