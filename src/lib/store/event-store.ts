@@ -6,7 +6,7 @@ import {
   SubmissionPayload,
   AdminStats,
 } from '@/types';
-import { calculateAccuracy, calculateWPM, isQualifiedAttempt } from '@/lib/utils/typing';
+import { computeAttemptMetrics, isQualifiedAttempt } from '@/lib/utils/typing';
 import { getPool, isUuid } from '@/lib/db/postgres';
 
 // Initial Official Passage for Tensor MacTober
@@ -75,8 +75,10 @@ class MemoryDataStore {
 
       const elapsed = 60;
       const totalChars = Math.round(s.wpm * 5);
-      const correctChars = Math.round((s.acc / 100) * totalChars);
-      const incorrectChars = totalChars - correctChars;
+      // Seeded typists corrected most of their mistypes; a few typos remain.
+      const mistypes = Math.round(totalChars * (1 - s.acc / 100));
+      const typos = Math.floor(mistypes / 3);
+      const correctChars = totalChars - typos;
 
       const att: TypingAttempt = {
         tab_switches: 0,
@@ -88,10 +90,14 @@ class MemoryDataStore {
         elapsed_seconds: elapsed,
         wpm: s.wpm,
         wpm_display: s.wpm,
+        raw_wpm: Math.round((totalChars / 5) * 100) / 100,
         accuracy: s.acc,
         correct_characters: correctChars,
-        incorrect_characters: incorrectChars,
+        incorrect_characters: typos,
         total_characters: totalChars,
+        total_keystrokes: totalChars + (mistypes - typos),
+        incorrect_keystrokes: mistypes,
+        corrections: mistypes - typos,
         qualified: true,
         is_demo: true,
         created_at: new Date(baseTime + 60000).toISOString(),
@@ -496,20 +502,32 @@ export class EventService {
       }
     }
 
-    // 4. Server-side Score Calculation (Do NOT trust client WPM/Accuracy)
-    const { correctCharacters, incorrectCharacters, totalCharacters, elapsedSeconds } = payload;
-    
-    // Validate character counts
-    const effectiveTotal = Math.max(totalCharacters, correctCharacters + incorrectCharacters);
-    const accuracy = calculateAccuracy(correctCharacters, effectiveTotal);
+    // 4. Server-side Score Calculation (Do NOT trust client WPM/Accuracy).
+    //    Correct / incorrect characters are recomputed from the typed text against the
+    //    event's own passage; keystroke counters are clamped so they cannot flatter the result.
+    const typedText = typeof payload.typedText === 'string' ? payload.typedText : '';
+    if (typedText.length > event.passage.length) {
+      throw new Error('Typed text is longer than the passage.');
+    }
 
-    // Standard typing WPM: use server configured test duration or actual bounded elapsed time
+    // Timing: actual time typed (sub-second precision), bounded by the configured test duration.
+    // An attempt that finishes the passage early is scored over the time it actually took.
     const configuredDuration = event.test_duration || 60;
-    const effectiveElapsedSecs = elapsedSeconds
-      ? Math.min(configuredDuration, Math.max(1, elapsedSeconds))
-      : configuredDuration;
+    const reportedElapsed = Number(payload.elapsedSeconds);
+    const effectiveElapsedSecs =
+      Number.isFinite(reportedElapsed) && reportedElapsed > 0
+        ? Math.round(Math.min(configuredDuration, Math.max(1, reportedElapsed)) * 100) / 100
+        : configuredDuration;
 
-    const { precise: wpm, display: wpmDisplay } = calculateWPM(correctCharacters, effectiveElapsedSecs);
+    const metrics = computeAttemptMetrics({
+      passage: event.passage,
+      typedText,
+      elapsedSeconds: effectiveElapsedSecs,
+      totalKeystrokes: payload.totalKeystrokes,
+      incorrectKeystrokes: payload.incorrectKeystrokes,
+      corrections: payload.corrections,
+    });
+    const { wpm, wpmDisplay, accuracy } = metrics;
     const qualified = isQualifiedAttempt(accuracy, event.minimum_accuracy);
 
     // 5. Save attempt
@@ -522,10 +540,14 @@ export class EventService {
       elapsed_seconds: effectiveElapsedSecs,
       wpm,
       wpm_display: wpmDisplay,
+      raw_wpm: metrics.rawWpm,
       accuracy,
-      correct_characters: correctCharacters,
-      incorrect_characters: incorrectCharacters,
-      total_characters: effectiveTotal,
+      correct_characters: metrics.correctCharacters,
+      incorrect_characters: metrics.incorrectCharacters,
+      total_characters: metrics.totalCharacters,
+      total_keystrokes: metrics.totalKeystrokes,
+      incorrect_keystrokes: metrics.incorrectKeystrokes,
+      corrections: metrics.corrections,
       qualified,
       is_demo: event.is_demo,
       created_at: new Date().toISOString(),
@@ -832,23 +854,33 @@ export class EventService {
 
     for (const d of demoNames) {
       const p = await this.registerParticipant(event.id, d.name, d.id, `${d.id.toLowerCase()}@demo.local`);
+      const duration = event.test_duration || 60;
       const wpm = Math.floor(Math.random() * 45) + 65; // 65 - 110 WPM
       const acc = Math.round((Math.random() * 15 + 85) * 10) / 10; // 85% - 100%
-      const totalChars = Math.round(wpm * 5);
-      const correctChars = Math.round((acc / 100) * totalChars);
+      const totalChars = Math.min(event.passage.length, Math.round((wpm * 5 * duration) / 60));
+
+      // Build a typed text with a few uncorrected typos; the rest of the
+      // mistypes were corrected with backspace (counted as keystrokes, not text).
+      const mistypes = Math.round(totalChars * (1 - acc / 100));
+      const typos = Math.floor(mistypes / 3);
+      const chars = event.passage.substring(0, totalChars).split('');
+      for (let i = 0; i < typos && chars.length > 0; i++) {
+        const idx = Math.floor(Math.random() * chars.length);
+        chars[idx] = chars[idx] === 'x' ? 'z' : 'x';
+      }
 
       await this.submitAttempt({
         eventId: event.id,
         participantId: p.id,
         sessionId: p.session_id,
-        startedAt: new Date(Date.now() - 60000).toISOString(),
+        startedAt: new Date(Date.now() - duration * 1000).toISOString(),
         completedAt: new Date().toISOString(),
-        elapsedSeconds: event.test_duration,
+        elapsedSeconds: duration,
         passageText: event.passage,
-        typedText: event.passage.substring(0, totalChars),
-        correctCharacters: correctChars,
-        incorrectCharacters: totalChars - correctChars,
-        totalCharacters: totalChars,
+        typedText: chars.join(''),
+        totalKeystrokes: totalChars + (mistypes - typos),
+        incorrectKeystrokes: mistypes,
+        corrections: mistypes - typos,
       });
     }
   }

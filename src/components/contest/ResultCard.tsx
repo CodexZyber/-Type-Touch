@@ -130,19 +130,35 @@ export default function ResultCard({
         </div>
 
         {/* Detailed Breakdown */}
-        <div className="flex items-center justify-center space-x-6 text-xs text-zinc-400 font-mono mb-8 border-t border-b border-white/5 py-3">
-          <div>
-            Correct: <span className="text-emerald-400 font-bold">{attempt.correct_characters}</span>
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-y-3 text-xs text-zinc-400 font-mono mb-8 border-t border-b border-white/5 py-3">
+          <div className="flex flex-col items-center">
+            <span className="text-white font-bold text-sm">{Math.round(attempt.raw_wpm ?? 0)}</span>
+            <span className="text-[10px] uppercase tracking-wider">Raw WPM</span>
           </div>
-          <div>•</div>
-          <div>
-            Errors: <span className="text-red-400 font-bold">{attempt.incorrect_characters}</span>
+          <div className="flex flex-col items-center">
+            <span className="text-emerald-400 font-bold text-sm">{attempt.correct_characters}</span>
+            <span className="text-[10px] uppercase tracking-wider">Correct</span>
           </div>
-          <div>•</div>
-          <div>
-            Total: <span className="text-white font-bold">{attempt.total_characters}</span>
+          <div className="flex flex-col items-center">
+            <span className="text-red-400 font-bold text-sm">{attempt.incorrect_keystrokes ?? attempt.incorrect_characters}</span>
+            <span className="text-[10px] uppercase tracking-wider">Mistypes</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <span className="text-red-300 font-bold text-sm">{attempt.incorrect_characters}</span>
+            <span className="text-[10px] uppercase tracking-wider">Uncorrected</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <span className="text-amber-300 font-bold text-sm">{attempt.corrections ?? 0}</span>
+            <span className="text-[10px] uppercase tracking-wider">Corrected</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <span className="text-white font-bold text-sm">{attempt.total_keystrokes ?? attempt.total_characters}</span>
+            <span className="text-[10px] uppercase tracking-wider">Keystrokes</span>
           </div>
         </div>
+        <p className="text-[11px] text-zinc-500 -mt-5 mb-7">
+          Accuracy = correct keystrokes ÷ all keystrokes. Backspacing fixes the text but not the mistype.
+        </p>
 
         {/* Attempt Limit Notice if Applicable */}
         {maxAttempts && (

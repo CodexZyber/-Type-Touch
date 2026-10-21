@@ -77,7 +77,7 @@ export default function AttemptHistoryModal({
                     <th className="py-2.5 px-3 text-right">WPM</th>
                     <th className="py-2.5 px-3 text-right">Accuracy</th>
                     <th className="py-2.5 px-3 text-right">Correct</th>
-                    <th className="py-2.5 px-3 text-right">Errors</th>
+                    <th className="py-2.5 px-3 text-right" title="Mistypes / uncorrected">Errors</th>
                     <th className="py-2.5 px-3 text-center">Qualified</th>
                   </tr>
                 </thead>
@@ -106,8 +106,9 @@ export default function AttemptHistoryModal({
                       <td className="py-2.5 px-3 text-right text-emerald-400">
                         {att.correct_characters}
                       </td>
-                      <td className="py-2.5 px-3 text-right text-red-400">
-                        {att.incorrect_characters}
+                      <td className="py-2.5 px-3 text-right text-red-400" title="Mistypes (wrong keypresses) / uncorrected typos left in the text">
+                        {att.incorrect_keystrokes ?? att.incorrect_characters}
+                        <span className="text-zinc-500"> / {att.incorrect_characters}</span>
                       </td>
                       <td className="py-2.5 px-3 text-center">
                         {att.qualified ? (

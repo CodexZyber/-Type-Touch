@@ -42,12 +42,16 @@ export interface TypingAttempt {
   completed_at: string;
   tab_switches: number;
   elapsed_seconds: number;
-  wpm: number; // precise float
-  wpm_display: number; // rounded integer
-  accuracy: number; // percentage rounded to 2 decimal places
-  correct_characters: number;
-  incorrect_characters: number;
-  total_characters: number;
+  wpm: number; // net WPM, precise float: (correct chars / 5) / minutes
+  wpm_display: number; // net WPM rounded to an integer
+  raw_wpm: number; // all typed chars / 5 / minutes
+  accuracy: number; // keystroke accuracy %, 2 decimals: (keystrokes - mistypes) / keystrokes
+  correct_characters: number; // correct chars in the final text
+  incorrect_characters: number; // uncorrected typos left in the final text
+  total_characters: number; // length of the final text
+  total_keystrokes: number; // character-producing keypresses (backspace excluded)
+  incorrect_keystrokes: number; // mistypes: wrong keypresses, corrected or not
+  corrections: number; // characters removed with backspace
   qualified: boolean;
   is_demo: boolean;
   created_at: string;
@@ -86,7 +90,12 @@ export interface SubmissionPayload {
   tabSwitches?: number;
   passageText: string;
   typedText: string;
-  correctCharacters: number;
-  incorrectCharacters: number;
-  totalCharacters: number;
+  /** Keystroke counters tracked by the client; the server clamps them against typedText. */
+  totalKeystrokes?: number;
+  incorrectKeystrokes?: number;
+  corrections?: number;
+  /** @deprecated derived server-side from typedText; kept for old clients */
+  correctCharacters?: number;
+  incorrectCharacters?: number;
+  totalCharacters?: number;
 }

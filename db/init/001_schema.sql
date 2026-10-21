@@ -48,12 +48,16 @@ CREATE TABLE IF NOT EXISTS attempts (
     completed_at TIMESTAMPTZ NOT NULL,
     tab_switches INTEGER NOT NULL DEFAULT 0,
     elapsed_seconds NUMERIC(6, 2) NOT NULL DEFAULT 60.00,
-    wpm NUMERIC(6, 2) NOT NULL,
+    wpm NUMERIC(6, 2) NOT NULL,                      -- net WPM: (correct chars / 5) / minutes
     wpm_display INTEGER NOT NULL,
-    accuracy NUMERIC(5, 2) NOT NULL,
-    correct_characters INTEGER NOT NULL,
-    incorrect_characters INTEGER NOT NULL,
-    total_characters INTEGER NOT NULL,
+    raw_wpm NUMERIC(6, 2) NOT NULL DEFAULT 0,        -- all typed chars / 5 / minutes
+    accuracy NUMERIC(5, 2) NOT NULL,                 -- keystroke accuracy: (keystrokes - mistypes) / keystrokes
+    correct_characters INTEGER NOT NULL,             -- correct chars in the final text
+    incorrect_characters INTEGER NOT NULL,           -- uncorrected typos left in the final text
+    total_characters INTEGER NOT NULL,               -- length of the final text
+    total_keystrokes INTEGER NOT NULL DEFAULT 0,     -- character-producing keypresses (no backspace)
+    incorrect_keystrokes INTEGER NOT NULL DEFAULT 0, -- mistypes, corrected or not
+    corrections INTEGER NOT NULL DEFAULT 0,          -- characters removed with backspace
     qualified BOOLEAN NOT NULL DEFAULT FALSE,
     is_demo BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

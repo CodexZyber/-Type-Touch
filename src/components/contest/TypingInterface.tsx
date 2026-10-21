@@ -2,7 +2,12 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChampionshipEvent, Participant, TypingAttempt } from '@/types';
-import { analyzeTyping, calculateAccuracy, calculateWPM } from '@/lib/utils/typing';
+import {
+  computeAttemptMetrics,
+  diffKeystrokes,
+  EMPTY_KEYSTROKE_STATS,
+  KeystrokeStats,
+} from '@/lib/utils/typing';
 import { formatDuration } from '@/lib/utils/timer';
 import ResultCard from './ResultCard';
 import { Play, Timer, Target, Flame, AlertCircle, ShieldAlert, Sparkles } from 'lucide-react';
@@ -22,6 +27,7 @@ export default function TypingInterface({
 }: TypingInterfaceProps) {
   const [gameState, setGameState] = useState<'READY' | 'TYPING' | 'SUBMITTING' | 'RESULT'>('READY');
   const [input, setInput] = useState<string>('');
+  const [keystrokeStats, setKeystrokeStats] = useState<KeystrokeStats>(EMPTY_KEYSTROKE_STATS);
   const [timeRemaining, setTimeRemaining] = useState<number>(event.test_duration || 60);
   const [attemptResult, setAttemptResult] = useState<{
     attempt: TypingAttempt;
@@ -38,6 +44,7 @@ export default function TypingInterface({
   const deadlineRef = useRef<number>(0);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const latestInputRef = useRef<string>('');
+  const keystrokeStatsRef = useRef<KeystrokeStats>(EMPTY_KEYSTROKE_STATS);
   const isSubmittingRef = useRef<boolean>(false);
   const tabSwitchesRef = useRef<number>(0);
 
@@ -97,11 +104,13 @@ export default function TypingInterface({
     const completedServerTime = now + serverOffsetMs;
     const startMs = startTimeRef.current || now;
     const effectiveStarted = startMs + serverOffsetMs;
-    const actualElapsedSecs = Math.max(1, Math.round((now - startMs) / 1000));
+    // Sub-second precision so an early finish is scored over the time it actually took.
+    const actualElapsedSecs = Math.max(1, Math.round((now - startMs) / 10) / 100);
 
     const currentTyped = latestInputRef.current;
-    const analysis = analyzeTyping(passage, currentTyped);
+    const stats = keystrokeStatsRef.current;
 
+    // The server recomputes WPM / accuracy from typedText + these keystroke counters.
     const payload = {
       eventId: event.id,
       participantId: participant.id,
@@ -112,9 +121,9 @@ export default function TypingInterface({
       tabSwitches: tabSwitchesRef.current,
       passageText: passage,
       typedText: currentTyped,
-      correctCharacters: analysis.correctCharacters,
-      incorrectCharacters: analysis.incorrectCharacters,
-      totalCharacters: analysis.totalCharacters,
+      totalKeystrokes: stats.totalKeystrokes,
+      incorrectKeystrokes: stats.incorrectKeystrokes,
+      corrections: stats.corrections,
     };
 
     try {
@@ -177,6 +186,8 @@ export default function TypingInterface({
     isSubmittingRef.current = false;
     tabSwitchesRef.current = 0;
     latestInputRef.current = '';
+    keystrokeStatsRef.current = EMPTY_KEYSTROKE_STATS;
+    setKeystrokeStats(EMPTY_KEYSTROKE_STATS);
     setInput('');
     setTimeRemaining(effectiveSecs);
 
@@ -276,6 +287,13 @@ export default function TypingInterface({
     // Do not allow typing beyond the passage length
     if (value.length > passage.length) return;
 
+    // Keystroke accounting: every new character is a keystroke, every character that
+    // differs from the passage is a mistype, every removed character is a correction.
+    // Backspacing never undoes a mistype (keystroke-based accuracy).
+    const nextStats = diffKeystrokes(latestInputRef.current, value, passage, keystrokeStatsRef.current);
+    keystrokeStatsRef.current = nextStats;
+    setKeystrokeStats(nextStats);
+
     latestInputRef.current = value;
     setInput(value);
 
@@ -293,13 +311,18 @@ export default function TypingInterface({
     }
   };
 
-  // Live Stats calculations
-  const currentAnalysis = analyzeTyping(passage, input);
-  const liveAcc = calculateAccuracy(currentAnalysis.correctCharacters, currentAnalysis.totalCharacters);
+  // Live Stats calculations (same formula the server applies on submit)
   const effectiveElapsed = startTimeRef.current
-    ? Math.max(1, Math.floor((Date.now() - startTimeRef.current) / 1000))
+    ? Math.max(1, (Date.now() - startTimeRef.current) / 1000)
     : Math.max(1, (event.test_duration || 60) - timeRemaining);
-  const liveWpm = calculateWPM(currentAnalysis.correctCharacters, effectiveElapsed).display;
+  const liveMetrics = computeAttemptMetrics({
+    passage,
+    typedText: input,
+    elapsedSeconds: effectiveElapsed,
+    ...keystrokeStats,
+  });
+  const liveAcc = liveMetrics.accuracy;
+  const liveWpm = liveMetrics.wpmDisplay;
 
   // Render Ready State
   if (gameState === 'READY') {
@@ -314,6 +337,10 @@ export default function TypingInterface({
         <h2 className="text-3xl font-extrabold text-white mb-2 tracking-tight">Ready?</h2>
         <p className="text-sm text-zinc-400 max-w-md mx-auto mb-4">
           The test lasts exactly <strong className="text-white">{event.test_duration || 60} seconds</strong>. All students receive the identical passage. Minimum <strong className="text-orange-400">{event.minimum_accuracy || 85}% accuracy</strong> required to qualify.
+        </p>
+        <p className="text-xs text-zinc-500 max-w-md mx-auto mb-4">
+          WPM counts correct characters only (5 characters = 1 word). Accuracy is measured per keystroke:
+          every wrong key press counts, even if you backspace and fix it.
         </p>
 
         <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-mono text-zinc-300 mb-6">
@@ -430,7 +457,7 @@ export default function TypingInterface({
                 liveAcc >= (event.minimum_accuracy || 85) ? 'text-white' : 'text-red-400'
               }`}
             >
-              {liveAcc}%
+              {keystrokeStats.totalKeystrokes === 0 ? '100' : liveAcc}%
             </div>
           </div>
         </div>
@@ -501,7 +528,13 @@ export default function TypingInterface({
         />
         <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono mt-1 px-1">
           <span>Click to focus • Input is auto-locked at {event.test_duration || 60} seconds</span>
-          <span>{input.length} / {passage.length} characters</span>
+          <span>
+            Raw {liveMetrics.rawWpm.toFixed(0)} WPM •{' '}
+            <span className={keystrokeStats.incorrectKeystrokes > 0 ? 'text-red-400' : ''}>
+              {keystrokeStats.incorrectKeystrokes} mistypes
+            </span>{' '}
+            • {keystrokeStats.corrections} corrected • {input.length} / {passage.length}
+          </span>
         </div>
       </div>
     </div>
