@@ -74,10 +74,11 @@ function hashPassword(password) {
   return `scrypt$N=16384,r=8,p=1$${salt}$${derivedKey.toString('hex')}`;
 }
 
-// Next.js expands `$NAME` references in .env files. Escape every dollar sign
-// so the stored scrypt separators survive loading through @next/env.
+// Next.js and Docker Compose both expand `$NAME` references in .env files.
+// Escape every dollar sign and double-quote the value: Compose only honours
+// `\$` inside double quotes, and @next/env accepts the same form.
 function serializeEnvValue(value) {
-  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$');
+  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$')}"`;
 }
 
 const username = customUsername || `admin_${crypto.randomBytes(4).toString('hex')}`;

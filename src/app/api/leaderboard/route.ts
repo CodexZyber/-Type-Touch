@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     const event = await EventService.getActiveEvent();
     const targetEventId = eventId || event.id;
 
-    const leaderboard = await EventService.getLeaderboard(targetEventId);
+    const leaderboard = await EventService.getLeaderboardCached(targetEventId);
 
     return NextResponse.json({
       success: true,

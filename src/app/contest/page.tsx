@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ChampionshipEvent, Participant, LeaderboardEntry } from '@/types';
 import { getEventTimerInfo } from '@/lib/utils/timer';
+import { loadVerifiedParticipant } from '@/lib/utils/participant-session';
 import TypingInterface from '@/components/contest/TypingInterface';
 import LiveSidebarLeaderboard from '@/components/contest/LiveSidebarLeaderboard';
 import { 
@@ -34,18 +35,15 @@ export default function ContestPage() {
   const [regStudentId, setRegStudentId] = useState('');
   const [regError, setRegError] = useState<string | null>(null);
 
-  // Load participant from localStorage
+  // Load participant from localStorage, re-validated against the server
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('tensor_mactober_participant');
-      if (stored) {
-        setParticipant(JSON.parse(stored));
+    loadVerifiedParticipant().then((verified) => {
+      if (verified) {
+        setParticipant(verified);
       } else {
         setIsRegisterOpen(true);
       }
-    } catch (e) {
-      // ignore
-    }
+    });
   }, []);
 
   // Fetch Event & Leaderboard

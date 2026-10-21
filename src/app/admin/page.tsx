@@ -189,9 +189,12 @@ const [finalistsCount, setFinalistsCount] = useState<number>(2);
       const data = await res.json();
       if (data.success) {
         loadAdminData();
+      } else {
+        window.alert(`Could not ${action} the event: ${data.error || `HTTP ${res.status}`}`);
       }
     } catch (err) {
       console.error(err);
+      window.alert(`Could not ${action} the event. Check the server logs.`);
     }
   };
 

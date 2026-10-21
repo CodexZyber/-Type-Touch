@@ -1,0 +1,28 @@
+node_modules
+.next
+.git
+.gitignore
+.vercel
+*.tsbuildinfo
+npm-debug.log*
+
+# Secrets: runtime env comes from docker-compose env_file, never baked in
+.env
+.env.*
+!.env.example
+
+# Stale manual backups
+**/*.backup
+**/*.save
+**/*.before_*
+**/*_fix_backup
+**/*.batch_backup
+
+Dockerfile
+docker-compose.yml
+deploy
+supabase
+db
+README.md
+CLAUDE.md
+*.png

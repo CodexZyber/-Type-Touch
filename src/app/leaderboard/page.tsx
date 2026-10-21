@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { LeaderboardEntry, ChampionshipEvent, Participant } from '@/types';
 import { formatDateTime } from '@/lib/utils/timer';
-import { getSupabaseClient } from '@/lib/supabase/client';
 import { 
   Trophy, 
   Crown, 
@@ -64,31 +63,11 @@ export default function LeaderboardPage() {
   useEffect(() => {
     fetchLeaderboard();
 
-    // Supabase Realtime setup if configured
-    const supabase = getSupabaseClient();
-    let channel: any = null;
-
-    if (supabase) {
-      channel = supabase
-        .channel('leaderboard_updates')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'attempts' },
-          () => {
-            fetchLeaderboard();
-          }
-        )
-        .subscribe();
-    }
-
     // High frequency interval (3s) for seamless live updates
     const interval = setInterval(fetchLeaderboard, 3000);
 
     return () => {
       clearInterval(interval);
-      if (channel && supabase) {
-        supabase.removeChannel(channel);
-      }
     };
   }, []);
 

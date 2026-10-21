@@ -1,0 +1,54 @@
+# Run with:  docker compose --env-file .env.local up -d --build
+# (--env-file supplies POSTGRES_PASSWORD / NEXT_PUBLIC_APP_URL for interpolation;
+#  env_file supplies the app's runtime secrets.)
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: tensor-mactober-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tensor
+      POSTGRES_USER: tensor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.local}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs only when the volume is empty (first start)
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    # Localhost only, so `npm run dev` on this machine can reach it; never public.
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tensor -d tensor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+    image: tensor-mactober:latest
+    container_name: tensor-mactober
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env.local
+    environment:
+      NODE_ENV: production
+      # Overrides the localhost DATABASE_URL in .env.local with the in-network host
+      DATABASE_URL: postgres://tensor:${POSTGRES_PASSWORD}@db:5432/tensor
+    # Localhost only: nginx on the host is the public entry point.
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/time"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  pgdata:

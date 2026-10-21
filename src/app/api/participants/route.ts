@@ -12,6 +12,7 @@ export async function GET(request: Request) {
 
     // Public route: Individual participant querying their own attempts & remaining quota
     if (participantId) {
+      const participant = await EventService.getParticipant(participantId);
       const attempts = await EventService.getParticipantAttempts(participantId);
       const event = await EventService.getActiveEvent();
       const maxAttempts = event.max_attempts;
@@ -19,6 +20,8 @@ export async function GET(request: Request) {
       const attemptsRemaining = maxAttempts !== null ? Math.max(0, maxAttempts - attemptsCount) : null;
       return NextResponse.json({
         success: true,
+        // null when the server doesn't know this id (e.g. stale browser storage)
+        participant,
         attempts,
         attemptsCount,
         maxAttempts,

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ChampionshipEvent, Participant } from '@/types';
 import { getEventTimerInfo } from '@/lib/utils/timer';
+import { loadVerifiedParticipant } from '@/lib/utils/participant-session';
 import { 
   Trophy, 
   Flame, 
@@ -58,16 +59,11 @@ export default function LandingPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Check LocalStorage Participant
+  // Check LocalStorage Participant (re-validated against the server)
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('tensor_mactober_participant');
-      if (stored) {
-        setParticipant(JSON.parse(stored));
-      }
-    } catch (e) {
-      // ignore
-    }
+    loadVerifiedParticipant().then((verified) => {
+      if (verified) setParticipant(verified);
+    });
   }, []);
 
   // Live Timer Countdown

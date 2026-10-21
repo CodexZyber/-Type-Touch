@@ -7,7 +7,7 @@ import {
   AdminStats,
 } from '@/types';
 import { calculateAccuracy, calculateWPM, isQualifiedAttempt } from '@/lib/utils/typing';
-import { getServerSupabase } from '@/lib/supabase/server';
+import { getPool, isUuid } from '@/lib/db/postgres';
 
 // Initial Official Passage for Tensor MacTober
 export const OFFICIAL_PASSAGE =
@@ -108,33 +108,67 @@ if (!globalAny.__tensorStore) {
 }
 const memoryStore: MemoryDataStore = globalAny.__tensorStore;
 
+// Columns an admin config update may write (whitelist: keys are interpolated into SQL)
+const EVENT_UPDATABLE_COLUMNS = [
+  'name',
+  'subtitle',
+  'organization_name',
+  'status',
+  'start_time',
+  'end_time',
+  'test_duration',
+  'event_duration',
+  'minimum_accuracy',
+  'max_attempts',
+  'finalists_count',
+  'passage',
+  'is_demo',
+  'updated_at',
+] as const;
+
+// Postgres error code for foreign_key_violation
+const PG_FOREIGN_KEY_VIOLATION = '23503';
+
+// Every student and screen polls the public leaderboard, so concurrent polls share
+// one query and reuse the result briefly. Cleared on any write that affects ranking.
+const LEADERBOARD_CACHE_MS = 1000;
+const leaderboardCache = new Map<string, { expires: number; promise: Promise<LeaderboardEntry[]> }>();
+
 export class EventService {
   /**
    * Returns current active event with updated server-authoritative status
    */
   static async getActiveEvent(): Promise<ChampionshipEvent> {
-    const supabase = getServerSupabase();
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('events')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
+    const pool = getPool();
+    if (pool) {
+      const { rows } = await pool.query<ChampionshipEvent>(
+        'SELECT * FROM events ORDER BY created_at DESC LIMIT 1'
+      );
+      let event = rows[0];
 
-      if (!error && data) {
-        // Check if LIVE event has expired based on current server clock
-        if (data.status === 'LIVE' && data.end_time) {
-          if (new Date() >= new Date(data.end_time)) {
-            await supabase
-              .from('events')
-              .update({ status: 'ENDED', updated_at: new Date().toISOString() })
-              .eq('id', data.id);
-            data.status = 'ENDED';
-          }
-        }
-        return data as ChampionshipEvent;
+      if (!event) {
+        // Schema applied without the seed row: create the default event
+        const seed = memoryStore.event;
+        const created = await pool.query<ChampionshipEvent>(
+          `INSERT INTO events (name, subtitle, organization_name, passage)
+           VALUES ($1, $2, $3, $4) RETURNING *`,
+          [seed.name, seed.subtitle, seed.organization_name, seed.passage]
+        );
+        event = created.rows[0];
       }
+
+      // Check if LIVE event has expired based on current server clock
+      if (event.status === 'LIVE' && event.end_time) {
+        if (new Date() >= new Date(event.end_time)) {
+          const ended = await pool.query<ChampionshipEvent>(
+            `UPDATE events SET status = 'ENDED', updated_at = now()
+             WHERE id = $1 AND status = 'LIVE' RETURNING *`,
+            [event.id]
+          );
+          event = ended.rows[0] || { ...event, status: 'ENDED' };
+        }
+      }
+      return event;
     }
 
     // In-memory fallback
@@ -243,27 +277,29 @@ export class EventService {
       updates.passage = p;
     }
 
-    const supabase = getServerSupabase();
     const newValues = {
       ...updates,
       updated_at: new Date().toISOString(),
     };
 
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('events')
-        .update(newValues)
-        .eq('id', activeEvent.id)
-        .select()
-        .single();
-
-      if (!error && data) {
-        return data as ChampionshipEvent;
+    const pool = getPool();
+    if (pool) {
+      const columns = EVENT_UPDATABLE_COLUMNS.filter((col) => (newValues as any)[col] !== undefined);
+      const setClause = columns.map((col, i) => `${col} = $${i + 2}`).join(', ');
+      const { rows } = await pool.query<ChampionshipEvent>(
+        `UPDATE events SET ${setClause} WHERE id = $1 RETURNING *`,
+        [activeEvent.id, ...columns.map((col) => (newValues as any)[col])]
+      );
+      if (!rows[0]) {
+        throw new Error('Event not found.');
       }
+      leaderboardCache.clear();
+      return rows[0];
     }
 
     // In-memory fallback
     Object.assign(memoryStore.event, newValues);
+    leaderboardCache.clear();
     return memoryStore.event;
   }
 
@@ -307,15 +343,15 @@ export class EventService {
    * Resets the event
    */
   static async resetEvent(clearAttempts: boolean = true): Promise<ChampionshipEvent> {
-    const supabase = getServerSupabase();
+    const pool = getPool();
     const active = await this.getActiveEvent();
 
-    if (supabase && clearAttempts) {
-      await supabase.from('attempts').delete().eq('event_id', active.id);
-    }
-
     if (clearAttempts) {
-      memoryStore.attempts = [];
+      if (pool) {
+        await pool.query('DELETE FROM attempts WHERE event_id = $1', [active.id]);
+      } else {
+        memoryStore.attempts = [];
+      }
     }
 
     return this.updateEvent({
@@ -362,36 +398,44 @@ export class EventService {
     const cleanName = name.trim();
     const cleanSessionId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    const supabase = getServerSupabase();
-    if (supabase) {
-      // Check existing by student_id or session_id
-      const { data: existing } = await supabase
-        .from('participants')
-        .select('*')
-        .eq('event_id', eventId)
-        .or(`student_id.eq.${cleanStudentId},session_id.eq.${cleanSessionId}`)
-        .maybeSingle();
-
-      if (existing) {
-        return existing as Participant;
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(eventId)) {
+        throw new Error('Unknown event. Please refresh the page and try again.');
       }
 
-      const { data: created, error } = await supabase
-        .from('participants')
-        .insert({
-          event_id: eventId,
-          name: cleanName,
-          student_id: cleanStudentId,
-          email: email?.trim() || null,
-          session_id: cleanSessionId,
-          disqualified: false,
-        })
-        .select()
-        .single();
+      // Check existing by student_id or session_id (a student_id match wins)
+      const findExisting = () =>
+        pool.query<Participant>(
+          `SELECT * FROM participants
+           WHERE event_id = $1 AND (student_id = $2 OR session_id = $3)
+           ORDER BY (student_id = $2) DESC
+           LIMIT 1`,
+          [eventId, cleanStudentId, cleanSessionId]
+        );
 
-      if (!error && created) {
-        return created as Participant;
+      const existing = await findExisting();
+      if (existing.rows[0]) {
+        return existing.rows[0];
       }
+
+      const created = await pool.query<Participant>(
+        `INSERT INTO participants (event_id, name, student_id, email, session_id)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (event_id, student_id) DO NOTHING
+         RETURNING *`,
+        [eventId, cleanName, cleanStudentId, email?.trim() || null, cleanSessionId]
+      );
+      if (created.rows[0]) {
+        return created.rows[0];
+      }
+
+      // Lost a race with a concurrent registration of the same student_id
+      const raced = await findExisting();
+      if (raced.rows[0]) {
+        return raced.rows[0];
+      }
+      throw new Error('Registration failed. Please try again.');
     }
 
     // In-memory fallback
@@ -469,9 +513,8 @@ export class EventService {
     const qualified = isQualifiedAttempt(accuracy, event.minimum_accuracy);
 
     // 5. Save attempt
-    const attempt: TypingAttempt = {
+    const attemptData: Omit<TypingAttempt, 'id'> = {
       tab_switches: payload.tabSwitches || 0,
-      id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       event_id: event.id,
       participant_id: payload.participantId,
       started_at: payload.startedAt,
@@ -488,12 +531,35 @@ export class EventService {
       created_at: new Date().toISOString(),
     };
 
-    const supabase = getServerSupabase();
-    if (supabase) {
-      await supabase.from('attempts').insert(attempt);
+    let attempt: TypingAttempt;
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(payload.participantId)) {
+        throw new Error('Unknown participant. Please register again.');
+      }
+      const columns = Object.keys(attemptData) as (keyof typeof attemptData)[];
+      try {
+        const { rows } = await pool.query<TypingAttempt>(
+          `INSERT INTO attempts (${columns.join(', ')})
+           VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})
+           RETURNING *`,
+          columns.map((col) => attemptData[col])
+        );
+        attempt = rows[0];
+      } catch (err: any) {
+        if (err?.code === PG_FOREIGN_KEY_VIOLATION) {
+          throw new Error('Unknown participant. Please register again.');
+        }
+        throw err;
+      }
     } else {
+      attempt = {
+        id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        ...attemptData,
+      };
       memoryStore.attempts.push(attempt);
     }
+    leaderboardCache.clear();
 
     // 6. Personal Best Determination
     const allUserAttempts = [attempt, ...userAttempts];
@@ -530,29 +596,34 @@ export class EventService {
   }
 
   /**
+   * Public leaderboard for polling clients: getLeaderboard behind a short shared cache
+   */
+  static getLeaderboardCached(eventId: string): Promise<LeaderboardEntry[]> {
+    const now = Date.now();
+    const hit = leaderboardCache.get(eventId);
+    if (hit && hit.expires > now) return hit.promise;
+
+    const promise = this.getLeaderboard(eventId);
+    leaderboardCache.set(eventId, { expires: now + LEADERBOARD_CACHE_MS, promise });
+    promise.catch(() => leaderboardCache.delete(eventId));
+    return promise;
+  }
+
+  /**
    * Retrieves live leaderboard with personal bests, 85% qualification filter, and tie-breakers:
    * 1. Highest WPM
    * 2. Highest Accuracy (tie-breaker)
    * 3. Earliest completed attempt (tie-breaker)
    */
   static async getLeaderboard(eventId: string): Promise<LeaderboardEntry[]> {
-    const supabase = getServerSupabase();
-    if (supabase) {
-      // Call Postgres RPC function if available
-      const { data, error } = await supabase.rpc('get_event_leaderboard', { p_event_id: eventId });
-      if (!error && Array.isArray(data)) {
-        return data.map((d: any) => ({
-          rank: Number(d.rank),
-          participant_id: d.participant_id,
-          name: d.name,
-          student_id: d.student_id,
-          best_wpm: d.best_wpm,
-          best_wpm_precise: Number(d.best_wpm_precise),
-          best_accuracy: Number(d.best_accuracy),
-          attempts_count: Number(d.attempts_count),
-          last_attempt_at: d.last_attempt_at,
-        }));
-      }
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(eventId)) return [];
+      const { rows } = await pool.query<LeaderboardEntry>(
+        'SELECT * FROM get_event_leaderboard($1)',
+        [eventId]
+      );
+      return rows;
     }
 
     // In-Memory Fallback calculation
@@ -615,18 +686,33 @@ export class EventService {
   }
 
   /**
+   * Looks up a single participant (used to re-validate the browser-stored participant)
+   */
+  static async getParticipant(participantId: string): Promise<Participant | null> {
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(participantId)) return null;
+      const { rows } = await pool.query<Participant>('SELECT * FROM participants WHERE id = $1', [
+        participantId,
+      ]);
+      return rows[0] || null;
+    }
+
+    return memoryStore.participants.get(participantId) || null;
+  }
+
+  /**
    * Retrieves participant attempt history
    */
   static async getParticipantAttempts(participantId: string): Promise<TypingAttempt[]> {
-    const supabase = getServerSupabase();
-    if (supabase) {
-      const { data } = await supabase
-        .from('attempts')
-        .select('*')
-        .eq('participant_id', participantId)
-        .order('created_at', { ascending: false });
-
-      if (data) return data as TypingAttempt[];
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(participantId)) return [];
+      const { rows } = await pool.query<TypingAttempt>(
+        'SELECT * FROM attempts WHERE participant_id = $1 ORDER BY created_at DESC',
+        [participantId]
+      );
+      return rows;
     }
 
     return memoryStore.attempts
@@ -638,27 +724,19 @@ export class EventService {
    * Retrieves all participants (with search & filter for Admin)
    */
   static async getAllParticipants(eventId: string): Promise<Participant[]> {
-    const supabase = getServerSupabase();
-    if (supabase) {
-      const { data } = await supabase
-        .from('participants')
-        .select('*, attempts:attempts(id)')
-        .eq('event_id', eventId)
-        .order('created_at', { ascending: false });
-      if (data) {
-        return data.map((p: any) => ({
-          id: p.id,
-          event_id: p.event_id,
-          name: p.name,
-          student_id: p.student_id,
-          email: p.email,
-          session_id: p.session_id,
-          disqualified: p.disqualified,
-          disqualification_reason: p.disqualification_reason,
-          created_at: p.created_at,
-          attempts_count: Array.isArray(p.attempts) ? p.attempts.length : 0,
-        })) as Participant[];
-      }
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(eventId)) return [];
+      const { rows } = await pool.query<Participant>(
+        `SELECT p.*,
+                (SELECT COUNT(*) FROM attempts a
+                  WHERE a.participant_id = p.id AND a.event_id = p.event_id) AS attempts_count
+         FROM participants p
+         WHERE p.event_id = $1
+         ORDER BY p.created_at DESC`,
+        [eventId]
+      );
+      return rows;
     }
 
     return Array.from(memoryStore.participants.values())
@@ -683,24 +761,23 @@ export class EventService {
     disqualified: boolean,
     reason?: string
   ): Promise<Participant | null> {
-    const supabase = getServerSupabase();
-    if (supabase) {
-      const { data } = await supabase
-        .from('participants')
-        .update({
-          disqualified,
-          disqualification_reason: disqualified ? reason || 'Rule violation' : null,
-        })
-        .eq('id', participantId)
-        .select()
-        .single();
-      if (data) return data as Participant;
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(participantId)) return null;
+      const { rows } = await pool.query<Participant>(
+        `UPDATE participants SET disqualified = $2, disqualification_reason = $3
+         WHERE id = $1 RETURNING *`,
+        [participantId, disqualified, disqualified ? reason || 'Rule violation' : null]
+      );
+      leaderboardCache.clear();
+      return rows[0] || null;
     }
 
     const p = memoryStore.participants.get(participantId);
     if (p) {
       p.disqualified = disqualified;
       p.disqualification_reason = disqualified ? reason || 'Rule violation' : null;
+      leaderboardCache.clear();
       return p;
     }
     return null;
@@ -715,13 +792,13 @@ export class EventService {
     const allParticipants = await this.getAllParticipants(event.id);
 
     let totalAttemptsCount = 0;
-    const supabase = getServerSupabase();
-    if (supabase) {
-      const { count } = await supabase
-        .from('attempts')
-        .select('*', { count: 'exact', head: true })
-        .eq('event_id', event.id);
-      totalAttemptsCount = count || 0;
+    const pool = getPool();
+    if (pool) {
+      const { rows } = await pool.query<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM attempts WHERE event_id = $1',
+        [event.id]
+      );
+      totalAttemptsCount = rows[0]?.count || 0;
     } else {
       totalAttemptsCount = memoryStore.attempts.filter((a) => a.event_id === event.id).length;
     }
@@ -780,28 +857,23 @@ export class EventService {
    * Retrieves all attempts for CSV export
    */
   static async getAllAttempts(eventId: string): Promise<any[]> {
-    const supabase = getServerSupabase();
-    if (supabase) {
-      const { data } = await supabase
-        .from('attempts')
-        .select(`
-          id,
-          wpm,
-          wpm_display,
-          accuracy,
-          correct_characters,
-          incorrect_characters,
-          total_characters,
-          qualified,
-          started_at,
-          completed_at,
-          created_at,
-          participant:participants(name, student_id, disqualified)
-        `)
-        .eq('event_id', eventId)
-        .order('created_at', { ascending: false });
-
-      if (data) return data;
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(eventId)) return [];
+      const { rows } = await pool.query(
+        `SELECT a.*,
+                json_build_object(
+                  'name', p.name,
+                  'student_id', p.student_id,
+                  'disqualified', p.disqualified
+                ) AS participant
+         FROM attempts a
+         JOIN participants p ON p.id = a.participant_id
+         WHERE a.event_id = $1
+         ORDER BY a.created_at DESC`,
+        [eventId]
+      );
+      return rows;
     }
 
     return memoryStore.attempts
