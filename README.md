@@ -1,6 +1,13 @@
 # Tensor School Typing Championship
 
-> ### 🌐 Live App: **[https://tensor-typing.98-70-53-61.sslip.io/](https://tensor-typing.98-70-53-61.sslip.io/)**
+> ### ⌨️ Students: [take the contest here → tensor-typing.98-70-53-61.sslip.io](https://tensor-typing.98-70-53-61.sslip.io/contest)
+>
+> 1. Open the link and click **Enter Contest Arena**.
+> 2. Sign in with the **username and password** you received by email.
+> 3. Type the passage as fast and accurately as you can. You need **85% accuracy** to rank.
+> 4. See where you stand on the **[live leaderboard](https://tensor-typing.98-70-53-61.sslip.io/leaderboard)**.
+>
+> Lost your login? Ask your host. Signing in on a new device signs you out of the old one.
 
 > **Type fast. Type clean. Climb the leaderboard.**
 
