@@ -1,5 +1,7 @@
 # Tensor School Typing Championship
 
+> ### 🌐 Live App: **[https://tensor-typing.98-70-53-61.sslip.io/](https://tensor-typing.98-70-53-61.sslip.io/)**
+
 > **Type fast. Type clean. Climb the leaderboard.**
 
 A production-ready event competition web application designed specifically for the organisation-wide **Tensor MacTober Typing Championship**, accommodating **180+ concurrent participants** with server-authoritative timing, live Realtime leaderboard, anti-cheat validation, and an interactive Host Control Center.
