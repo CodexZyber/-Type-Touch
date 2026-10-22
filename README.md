@@ -2,7 +2,7 @@
 
 > ### ⌨️ Students: [take the contest here → tensor-typing.98-70-53-61.sslip.io](https://tensor-typing.98-70-53-61.sslip.io/contest)
 >
-> 1. Open the link and click **Enter Contest Arena**.
+> 1. Open the link and click **Sign in**.
 > 2. Sign in with the **username and password** you received by email.
 > 3. Type the passage as fast and accurately as you can. You need **85% accuracy** to rank.
 > 4. See where you stand on the **[live leaderboard](https://tensor-typing.98-70-53-61.sslip.io/leaderboard)**.
