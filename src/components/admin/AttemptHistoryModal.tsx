@@ -38,20 +38,20 @@ export default function AttemptHistoryModal({
   if (!participant) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
-      <div className="w-full max-w-2xl rounded-3xl p-6 glass-panel-glow border border-white/15 shadow-apple-card relative max-h-[85vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+      <div className="w-full max-w-2xl rounded-3xl p-6 glass-panel-glow border border-slate-200 shadow-card relative max-h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-white/10 shrink-0">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-200 shrink-0">
           <div>
             <div className="flex items-center space-x-2">
-              <h3 className="text-lg font-bold text-white">{participant.name}</h3>
-              <span className="text-xs font-mono text-zinc-400">({participant.student_id})</span>
+              <h3 className="text-lg font-bold text-slate-900">{participant.name}</h3>
+              <span className="text-xs font-mono text-slate-500">({participant.student_id})</span>
             </div>
-            <p className="text-xs text-zinc-400">Complete Attempt Log & Accuracy Records</p>
+            <p className="text-xs text-slate-500">Complete Attempt Log & Accuracy Records</p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100"
           >
             <X className="w-5 h-5" />
           </button>
@@ -60,18 +60,18 @@ export default function AttemptHistoryModal({
         {/* Content Table */}
         <div className="overflow-y-auto flex-1 my-4 pr-1">
           {loading ? (
-            <div className="py-12 text-center text-xs text-zinc-500 font-mono">
+            <div className="py-12 text-center text-xs text-slate-500 font-mono">
               Loading attempt logs...
             </div>
           ) : attempts.length === 0 ? (
-            <div className="py-12 text-center text-xs text-zinc-500">
+            <div className="py-12 text-center text-xs text-slate-500">
               No attempts recorded yet for this participant.
             </div>
           ) : (
-            <div className="rounded-xl border border-white/10 overflow-hidden">
+            <div className="rounded-xl border border-slate-200 overflow-hidden">
               <table className="w-full text-left border-collapse text-xs font-mono">
                 <thead>
-                  <tr className="bg-white/5 text-[10px] uppercase text-zinc-400 border-b border-white/10">
+                  <tr className="bg-slate-50 text-[10px] uppercase text-slate-500 border-b border-slate-200">
                     <th className="py-2.5 px-3">Attempt #</th>
                     <th className="py-2.5 px-3">Time</th>
                     <th className="py-2.5 px-3 text-right">WPM</th>
@@ -81,43 +81,43 @@ export default function AttemptHistoryModal({
                     <th className="py-2.5 px-3 text-center">Qualified</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5">
+                <tbody className="divide-y divide-slate-100">
                   {attempts.map((att, idx) => (
                     <tr
                       key={att.id}
-                      className={att.qualified ? 'hover:bg-white/5' : 'bg-red-950/20 hover:bg-red-950/30'}
+                      className={att.qualified ? 'hover:bg-slate-50' : 'bg-red-50 hover:bg-red-50'}
                     >
-                      <td className="py-2.5 px-3 text-zinc-300 font-bold">
+                      <td className="py-2.5 px-3 text-slate-600 font-bold">
                         #{attempts.length - idx}
                       </td>
-                      <td className="py-2.5 px-3 text-zinc-400">
+                      <td className="py-2.5 px-3 text-slate-500">
                         {formatDateTime(att.completed_at || att.created_at)}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-bold text-white">
+                      <td className="py-2.5 px-3 text-right font-bold text-slate-900">
                         {att.wpm_display}
                       </td>
                       <td
                         className={`py-2.5 px-3 text-right font-semibold ${
-                          att.accuracy >= 85 ? 'text-zinc-200' : 'text-red-400'
+                          att.accuracy >= 85 ? 'text-slate-700' : 'text-red-600'
                         }`}
                       >
                         {att.accuracy}%
                       </td>
-                      <td className="py-2.5 px-3 text-right text-emerald-400">
+                      <td className="py-2.5 px-3 text-right text-emerald-600">
                         {att.correct_characters}
                       </td>
-                      <td className="py-2.5 px-3 text-right text-red-400" title="Mistypes (wrong keypresses) / uncorrected typos left in the text">
+                      <td className="py-2.5 px-3 text-right text-red-600" title="Mistypes (wrong keypresses) / uncorrected typos left in the text">
                         {att.incorrect_keystrokes ?? att.incorrect_characters}
-                        <span className="text-zinc-500"> / {att.incorrect_characters}</span>
+                        <span className="text-slate-500"> / {att.incorrect_characters}</span>
                       </td>
                       <td className="py-2.5 px-3 text-center">
                         {att.qualified ? (
-                          <span className="inline-flex items-center text-emerald-400 text-[11px] font-semibold">
+                          <span className="inline-flex items-center text-emerald-600 text-[11px] font-semibold">
                             <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                             YES
                           </span>
                         ) : (
-                          <span className="inline-flex items-center text-red-400 text-[11px] font-semibold">
+                          <span className="inline-flex items-center text-red-600 text-[11px] font-semibold">
                             <XCircle className="w-3.5 h-3.5 mr-1" />
                             NO (&lt;85%)
                           </span>
@@ -132,11 +132,11 @@ export default function AttemptHistoryModal({
         </div>
 
         {/* Footer */}
-        <div className="pt-3 border-t border-white/10 flex justify-between items-center text-xs text-zinc-400 shrink-0">
+        <div className="pt-3 border-t border-slate-200 flex justify-between items-center text-xs text-slate-500 shrink-0">
           <span>Total attempts: {attempts.length}</span>
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-medium text-xs transition-colors"
+            className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-900 font-medium text-xs transition-colors"
           >
             Close
           </button>

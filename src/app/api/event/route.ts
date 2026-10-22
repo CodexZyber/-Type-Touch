@@ -39,6 +39,10 @@ export async function PATCH(request: Request) {
       updatedEvent = await EventService.endEvent();
     } else if (action === 'reset') {
       updatedEvent = await EventService.resetEvent(updates?.clearAttempts ?? true);
+    } else if (action === 'start_final') {
+      updatedEvent = await EventService.startFinal(updates?.durationMinutes);
+    } else if (action === 'end_final') {
+      updatedEvent = await EventService.endFinal();
     } else {
       updatedEvent = await EventService.updateEvent(updates || {});
     }

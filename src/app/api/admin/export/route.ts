@@ -23,6 +23,7 @@ export async function GET(request: Request) {
         'Attempt ID',
         'Participant Name',
         'Student ID',
+        'Round',
         'Started At',
         'Completed At',
         'Elapsed Seconds',
@@ -35,6 +36,7 @@ export async function GET(request: Request) {
         'Total Keystrokes',
         'Mistypes',
         'Corrections',
+        'Consistency %',
         'Qualified',
         'Disqualified',
       ];
@@ -43,6 +45,7 @@ export async function GET(request: Request) {
         `"${a.id}"`,
         `"${(a.participant?.name || 'Unknown').replace(/"/g, '""')}"`,
         `"${(a.participant?.student_id || 'N/A').replace(/"/g, '""')}"`,
+        a.round || 'QUALIFIER',
         `"${a.started_at}"`,
         `"${a.completed_at}"`,
         a.elapsed_seconds,
@@ -55,6 +58,7 @@ export async function GET(request: Request) {
         a.total_keystrokes ?? '',
         a.incorrect_keystrokes ?? '',
         a.corrections ?? '',
+        a.consistency ?? '',
         a.qualified ? 'YES' : 'NO',
         a.participant?.disqualified ? 'YES' : 'NO',
       ]);
@@ -64,7 +68,7 @@ export async function GET(request: Request) {
       return new NextResponse(csvContent, {
         headers: {
           'Content-Type': 'text/csv; charset=utf-8',
-          'Content-Disposition': `attachment; filename="Tensor_MacTober_All_Attempts_${new Date().toISOString().slice(0, 10)}.csv"`,
+          'Content-Disposition': `attachment; filename="Tensor_School_All_Attempts_${new Date().toISOString().slice(0, 10)}.csv"`,
         },
       });
     }
@@ -100,7 +104,7 @@ export async function GET(request: Request) {
     return new NextResponse(csvContent, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="Tensor_MacTober_Leaderboard_Results_${new Date().toISOString().slice(0, 10)}.csv"`,
+        'Content-Disposition': `attachment; filename="Tensor_School_Leaderboard_Results_${new Date().toISOString().slice(0, 10)}.csv"`,
       },
     });
   } catch (error: any) {

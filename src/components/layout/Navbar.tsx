@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChampionshipEvent, Participant } from '@/types';
 import { getEventTimerInfo } from '@/lib/utils/timer';
-import { Trophy, Flame, UserCheck, Shield, Sparkles } from 'lucide-react';
+import { PARTICIPANT_STORAGE_KEY } from '@/lib/utils/participant-session';
+import { Keyboard, Trophy, UserRound, Crown } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -14,19 +15,18 @@ export default function Navbar() {
   const [timerText, setTimerText] = useState<string>('');
   const [serverOffsetMs, setServerOffsetMs] = useState<number>(0);
 
-  // Load participant from localStorage
+  // The host dashboard has its own chrome; keep the candidate nav out of it.
+  const isAdmin = pathname?.startsWith('/admin');
+
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('tensor_mactober_participant');
-      if (stored) {
-        setParticipant(JSON.parse(stored));
-      }
+      const stored = localStorage.getItem(PARTICIPANT_STORAGE_KEY);
+      setParticipant(stored ? JSON.parse(stored) : null);
     } catch (e) {
-      // ignore
+      setParticipant(null);
     }
   }, [pathname]);
 
-  // Fetch active event & server clock
   const refreshEvent = async () => {
     try {
       const res = await fetch('/api/event');
@@ -34,12 +34,11 @@ export default function Navbar() {
       if (data.success && data.event) {
         setEvent(data.event);
         if (data.serverTime) {
-          const serverMs = new Date(data.serverTime).getTime();
-          setServerOffsetMs(serverMs - Date.now());
+          setServerOffsetMs(new Date(data.serverTime).getTime() - Date.now());
         }
       }
     } catch (e) {
-      // offline/silent fallback
+      // offline: keep last known state
     }
   };
 
@@ -49,10 +48,8 @@ export default function Navbar() {
     return () => clearInterval(interval);
   }, []);
 
-  // Update countdown every second
   useEffect(() => {
     if (!event) return;
-
     const tick = () => {
       const info = getEventTimerInfo(
         event.status,
@@ -61,142 +58,116 @@ export default function Navbar() {
         event.test_duration,
         serverOffsetMs
       );
-
-      if (event.status === 'LIVE') {
-        setTimerText(`${info.formattedRemaining} REMAINING`);
-      } else if (event.status === 'NOT_STARTED') {
-        setTimerText('NOT STARTED');
+      if (event.final_status === 'LIVE') {
+        const finalInfo = getEventTimerInfo('LIVE', event.final_start_time, event.final_end_time, event.test_duration, serverOffsetMs);
+        setTimerText(finalInfo.formattedRemaining);
       } else {
-        setTimerText('CHAMPIONSHIP ENDED');
+        setTimerText(event.status === 'LIVE' ? info.formattedRemaining : '');
       }
     };
-
     tick();
     const timerInterval = setInterval(tick, 1000);
     return () => clearInterval(timerInterval);
   }, [event, serverOffsetMs]);
 
+  const finalStarted = Boolean(event && event.final_status !== 'NOT_STARTED');
   const navLinks = [
-    { label: 'Overview', href: '/' },
-    { label: 'Contest Arena', href: '/contest' },
-    { label: 'Live Leaderboard', href: '/leaderboard' },
-    { label: 'Grand Final', href: '/final' },
+    { label: 'Contest Arena', href: '/contest', icon: Keyboard },
+    { label: 'Leaderboard', href: '/leaderboard', icon: Trophy },
+    // The Grand Final only matters once it exists
+    ...(finalStarted ? [{ label: 'Grand Final', href: '/final', icon: Crown }] : []),
   ];
 
+  const finalLive = event?.final_status === 'LIVE';
+  const live = finalLive || event?.status === 'LIVE';
+  const statusStyles = live
+    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    : event?.status === 'ENDED'
+      ? 'bg-slate-100 text-slate-600 border-slate-200'
+      : 'bg-amber-50 text-amber-700 border-amber-200';
+
+  const statusLabel = finalLive
+    ? 'Final live'
+    : event?.status === 'LIVE'
+      ? 'Live'
+      : event?.status === 'ENDED'
+        ? event?.final_status === 'ENDED'
+          ? 'Final over'
+          : 'Ended'
+        : 'Not started';
+
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-white/10 glass-panel">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+    <header className="sticky top-0 z-50 w-full border-b border-slate-200/80 bg-white/85 backdrop-blur-md">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         {/* Brand */}
-        <div className="flex items-center space-x-3">
-          <Link href="/" className="flex items-center space-x-2.5 group">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center shadow-glow-orange group-hover:scale-105 transition-transform duration-200">
-              <span className="font-mono font-black text-black text-lg">T</span>
-            </div>
-            <div className="flex flex-col">
-              <div className="flex items-center space-x-1.5">
-                <span className="font-bold text-white tracking-wider text-sm">
-                  {event?.organization_name || 'TENSOR'}
-                </span>
-                <span className="font-extrabold text-orange-400 tracking-wider text-sm">MACtober</span>
-                <span className="text-[10px] font-mono text-zinc-400 border border-white/10 px-1 py-0.2 rounded">'26</span>
-              </div>
-              <span className="text-[10px] text-zinc-400 font-mono tracking-tight -mt-0.5 truncate max-w-[180px]">
-                {event?.name || 'Typing Championship'}
-              </span>
-            </div>
-          </Link>
+        <Link href="/" className="flex items-center gap-3 shrink-0" aria-label="Tensor School home">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/tensor-logo.png" alt="Tensor School of CS & AI" className="h-9 w-auto" />
+          <span className="hidden sm:block h-6 w-px bg-slate-200" />
+          <span className="hidden sm:block text-sm font-semibold text-slate-700 truncate max-w-[220px]">
+            {event?.name || 'Typing Championship'}
+          </span>
+        </Link>
 
-          {/* Demo Mode Badge */}
-          {event?.is_demo && (
-            <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-300 border border-amber-500/20">
-              <Sparkles className="w-2.5 h-2.5 mr-1 text-amber-400" />
-              DEMO MODE
-            </span>
-          )}
-        </div>
+        {/* Candidate navigation */}
+        {!isAdmin && (
+          <nav className="flex items-center gap-1">
+            {navLinks.map(({ label, href, icon: Icon }) => {
+              const isActive = pathname === href;
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                    isActive
+                      ? 'text-indigo-700 bg-indigo-50'
+                      : 'text-slate-600 hover:text-indigo-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="hidden xs:inline sm:inline">{label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        )}
 
-        {/* Navigation Items */}
-        <nav className="hidden md:flex items-center space-x-1 lg:space-x-2">
-          {navLinks.map((item) => {
-            const isActive = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-150 ${
-                  isActive
-                    ? 'text-white bg-white/10 shadow-sm border border-white/10'
-                    : 'text-zinc-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
-
-        {/* Right Section: Status Indicator & User Info */}
-        <div className="flex items-center space-x-3">
-          {/* Status Badge */}
+        {/* Status + identity */}
+        <div className="flex items-center gap-2 shrink-0">
           {event && (
             <div
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-mono border backdrop-blur-md transition-colors ${
-                event.status === 'LIVE'
-                  ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30'
-                  : event.status === 'ENDED'
-                  ? 'bg-red-950/40 text-red-300 border-red-500/30'
-                  : 'bg-zinc-900/60 text-zinc-400 border-white/10'
-              }`}
+              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border ${statusStyles}`}
             >
               <span className="relative flex h-2 w-2">
-                {event.status === 'LIVE' && (
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                {live && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                 )}
                 <span
                   className={`relative inline-flex rounded-full h-2 w-2 ${
-                    event.status === 'LIVE'
+                    live
                       ? 'bg-emerald-500'
                       : event.status === 'ENDED'
-                      ? 'bg-red-500'
-                      : 'bg-zinc-500'
+                        ? 'bg-slate-400'
+                        : 'bg-amber-500'
                   }`}
-                ></span>
+                />
               </span>
-              <span className="font-semibold">
-                {event.status === 'LIVE' ? 'LIVE' : event.status}
-              </span>
-              {timerText && event.status === 'LIVE' && (
-                <span className="text-zinc-300 font-mono text-[11px] hidden sm:inline pl-1 border-l border-white/10">
+              <span>{statusLabel}</span>
+              {timerText && (
+                <span className="hidden sm:inline font-mono tabular-nums pl-2 border-l border-emerald-200">
                   {timerText}
                 </span>
               )}
             </div>
           )}
 
-          {/* Participant Profile Chip */}
-          {participant ? (
-            <div className="hidden sm:flex items-center space-x-2 px-3 py-1 bg-white/5 border border-white/10 rounded-full">
-              <UserCheck className="w-3.5 h-3.5 text-orange-400" />
-              <span className="text-xs font-medium text-white max-w-[100px] truncate">{participant.name}</span>
-              <span className="text-[10px] font-mono text-zinc-400">({participant.student_id})</span>
+          {!isAdmin && participant && (
+            <div className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs">
+              <UserRound className="w-3.5 h-3.5 text-indigo-700" />
+              <span className="font-semibold text-slate-800 max-w-[120px] truncate">{participant.name}</span>
+              <span className="font-mono text-slate-500">{participant.student_id}</span>
             </div>
-          ) : (
-            <Link
-              href="/#register"
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white transition-colors duration-150 shadow-sm"
-            >
-              Join
-            </Link>
           )}
-
-          {/* Admin link */}
-          <Link
-            href="/admin"
-            title="Host & Admin Dashboard"
-            className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
-          >
-            <Shield className="w-4 h-4" />
-          </Link>
         </div>
       </div>
     </header>

@@ -1,6 +1,6 @@
-# Tensor MacTober Typing Championship '26
+# Tensor School Typing Championship
 
-> **60 seconds. One hour. Type your way to the top.**
+> **Type fast. Type clean. Climb the leaderboard.**
 
 A production-ready event competition web application designed specifically for the organisation-wide **Tensor MacTober Typing Championship**, accommodating **180+ concurrent participants** with server-authoritative timing, live Realtime leaderboard, anti-cheat validation, and an interactive Host Control Center.
 

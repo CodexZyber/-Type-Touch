@@ -1,4 +1,4 @@
-// Core Typing Calculations for Tensor MacTober Touch Type Championship
+// Core Typing Calculations for the Tensor School Typing Championship
 //
 // Scoring model (follows the convention used by TypeSprint / Monkeytype):
 //
@@ -138,6 +138,55 @@ export function diffKeystrokes(
     incorrectKeystrokes: stats.incorrectKeystrokes + mistyped,
     corrections: stats.corrections + removed,
   };
+}
+
+export interface TimelinePoint {
+  t: number;
+  wpm: number;
+  raw: number;
+  errors: number;
+}
+
+const MAX_TIMELINE_POINTS = 400;
+
+/**
+ * Cleans a client-recorded timeline: numeric, clamped, ordered by second,
+ * capped in length. Informational only (never feeds WPM or accuracy).
+ */
+export function sanitizeTimeline(raw: unknown, maxSeconds = 300): TimelinePoint[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TimelinePoint[] = [];
+  let lastT = -1;
+  for (const p of raw) {
+    if (!p || typeof p !== 'object') continue;
+    const t = Math.round(Number((p as any).t));
+    if (!Number.isFinite(t) || t < 0 || t > maxSeconds || t <= lastT) continue;
+    const num = (v: unknown, hi: number) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(hi, Math.max(0, Math.round(n))) : 0;
+    };
+    out.push({ t, wpm: num((p as any).wpm, 400), raw: num((p as any).raw, 600), errors: num((p as any).errors, 50) });
+    lastT = t;
+    if (out.length >= MAX_TIMELINE_POINTS) break;
+  }
+  return out;
+}
+
+/**
+ * Consistency: how even the per-second raw burst speed was, 0-100.
+ * 100 - coefficient of variation (stddev / mean), clamped. Leading and trailing
+ * idle seconds are ignored so a pause before starting doesn't dominate.
+ */
+export function calculateConsistency(timeline: TimelinePoint[]): number {
+  let series = timeline.map((p) => p.raw);
+  while (series.length && series[0] === 0) series.shift();
+  while (series.length && series[series.length - 1] === 0) series.pop();
+  if (series.length < 3) return series.length ? 100 : 0;
+  const mean = series.reduce((a, b) => a + b, 0) / series.length;
+  if (mean <= 0) return 0;
+  const variance = series.reduce((a, b) => a + (b - mean) ** 2, 0) / series.length;
+  const cv = Math.sqrt(variance) / mean;
+  return Math.max(0, Math.min(100, round2(100 * (1 - cv))));
 }
 
 export interface AttemptMetricsInput {

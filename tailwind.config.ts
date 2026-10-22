@@ -1,60 +1,57 @@
 import type { Config } from "tailwindcss";
 
+// Tensor School brand: light surfaces, slate text, indigo primary (#4338ca = indigo-700),
+// green chevron accent from the logo, amber reserved for podium gold.
 const config: Config = {
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
   ],
-  darkMode: "class",
   theme: {
     extend: {
       colors: {
-        mac: {
-          bg: "#0B0C0E",
-          card: "rgba(22, 24, 29, 0.75)",
-          cardHover: "rgba(30, 33, 40, 0.85)",
-          border: "rgba(255, 255, 255, 0.08)",
-          borderGlow: "rgba(255, 255, 255, 0.16)",
-          subtle: "#1C1F26",
-          textMuted: "#8E95A5",
-          accent: "#F97316", // Tensor Orange
-          accentHover: "#EA580C",
-          accentGlow: "rgba(249, 115, 22, 0.25)",
-          metal: "#E2E8F0",
-          success: "#10B981",
-          gold: "#F59E0B",
-          silver: "#94A3B8",
-          bronze: "#B45309",
-          danger: "#EF4444",
+        brand: {
+          bg: "#f7f6fa",
+          ink: "#0f172a",
+          muted: "#4b5563",
+          indigo: "#4338ca",
+          indigoDark: "#3730a3",
+          indigoSoft: "#eef2ff",
+          violet: "#7c3aed",
+          green: "#1ecc90",
+          navy: "#0f0a2a",
         },
       },
       fontFamily: {
         sans: [
+          '"Plus Jakarta Sans"',
+          "Inter",
+          "ui-sans-serif",
+          "system-ui",
           "-apple-system",
-          "BlinkMacSystemFont",
-          '"SF Pro Display"',
-          '"SF Pro Text"',
-          '"Helvetica Neue"',
+          '"Segoe UI"',
+          "Roboto",
           "Helvetica",
           "Arial",
           "sans-serif",
         ],
         mono: [
-          '"SF Mono"',
+          "ui-monospace",
+          "SFMono-Regular",
           "Menlo",
           "Monaco",
-          '"Cascadia Code"',
+          "Consolas",
+          '"Liberation Mono"',
           '"Courier New"',
           "monospace",
         ],
       },
       boxShadow: {
-        "apple-card": "0 8px 32px 0 rgba(0, 0, 0, 0.37)",
-        "keycap": "0 4px 0 0 rgba(0, 0, 0, 0.4), 0 5px 10px rgba(0, 0, 0, 0.3)",
-        "keycap-pressed": "0 1px 0 0 rgba(0, 0, 0, 0.4), 0 2px 5px rgba(0, 0, 0, 0.3)",
-        "glow-orange": "0 0 24px -4px rgba(249, 115, 22, 0.35)",
-        "glow-gold": "0 0 24px -4px rgba(245, 158, 11, 0.4)",
+        card: "0 1px 2px rgba(15, 23, 42, 0.04), 0 10px 30px -16px rgba(15, 23, 42, 0.12)",
+        "card-lg": "0 2px 4px rgba(15, 23, 42, 0.04), 0 24px 48px -20px rgba(15, 23, 42, 0.18)",
+        "glow-indigo": "0 8px 24px -8px rgba(67, 56, 202, 0.45)",
+        "glow-gold": "0 8px 24px -10px rgba(245, 158, 11, 0.45)",
       },
       animation: {
         "pulse-subtle": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",

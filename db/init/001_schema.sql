@@ -8,8 +8,8 @@
 -- 1. EVENTS TABLE
 CREATE TABLE IF NOT EXISTS events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL DEFAULT 'Tensor MacTober Typing Championship',
-    subtitle TEXT DEFAULT '60 seconds. One hour. Type your way to the top.',
+    name TEXT NOT NULL DEFAULT 'Tensor School Typing Championship',
+    subtitle TEXT DEFAULT 'Type fast. Type clean. Climb the leaderboard.',
     organization_name TEXT DEFAULT 'TENSOR',
     status TEXT NOT NULL CHECK (status IN ('NOT_STARTED', 'LIVE', 'ENDED')) DEFAULT 'NOT_STARTED',
     start_time TIMESTAMPTZ,
@@ -19,8 +19,16 @@ CREATE TABLE IF NOT EXISTS events (
     minimum_accuracy NUMERIC(5, 2) NOT NULL DEFAULT 85.0,
     max_attempts INTEGER, -- NULL means unlimited
     finalists_count INTEGER NOT NULL DEFAULT 2,
-    passage TEXT NOT NULL,
+    passage TEXT NOT NULL,                              -- qualifier-round passage
+    passage_mode TEXT NOT NULL CHECK (passage_mode IN ('random', 'custom')) DEFAULT 'random',
+    final_passage TEXT,                                 -- Grand Final passage (set when the final starts)
     is_demo BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Grand Final round: runs after the qualifier round has ENDED
+    final_status TEXT NOT NULL CHECK (final_status IN ('NOT_STARTED', 'LIVE', 'ENDED')) DEFAULT 'NOT_STARTED',
+    final_start_time TIMESTAMPTZ,
+    final_end_time TIMESTAMPTZ,
+    final_duration INTEGER NOT NULL DEFAULT 10, -- in minutes
+    finalist_ids JSONB NOT NULL DEFAULT '[]'::jsonb, -- participant ids frozen when the final starts
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -47,6 +55,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     started_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ NOT NULL,
     tab_switches INTEGER NOT NULL DEFAULT 0,
+    round TEXT NOT NULL CHECK (round IN ('QUALIFIER', 'FINAL')) DEFAULT 'QUALIFIER',
     elapsed_seconds NUMERIC(6, 2) NOT NULL DEFAULT 60.00,
     wpm NUMERIC(6, 2) NOT NULL,                      -- net WPM: (correct chars / 5) / minutes
     wpm_display INTEGER NOT NULL,
@@ -58,6 +67,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     total_keystrokes INTEGER NOT NULL DEFAULT 0,     -- character-producing keypresses (no backspace)
     incorrect_keystrokes INTEGER NOT NULL DEFAULT 0, -- mistypes, corrected or not
     corrections INTEGER NOT NULL DEFAULT 0,          -- characters removed with backspace
+    consistency NUMERIC(5, 2) NOT NULL DEFAULT 0,    -- evenness of per-second raw speed, 0-100
+    timeline JSONB NOT NULL DEFAULT '[]'::jsonb,     -- [{t, wpm, raw, errors}] one point per second
     qualified BOOLEAN NOT NULL DEFAULT FALSE,
     is_demo BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -72,6 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_attempts_event_qualified ON attempts(event_id, qu
 CREATE INDEX IF NOT EXISTS idx_attempts_participant_wpm ON attempts(participant_id, qualified, wpm DESC, accuracy DESC);
 CREATE INDEX IF NOT EXISTS idx_attempts_event_completed ON attempts(event_id, completed_at);
 CREATE INDEX IF NOT EXISTS idx_attempts_tab_switches ON attempts(event_id, tab_switches);
+CREATE INDEX IF NOT EXISTS idx_attempts_event_round ON attempts(event_id, round);
 
 -- 5. SERVER TIME
 CREATE OR REPLACE FUNCTION get_server_time()
@@ -86,7 +98,12 @@ $$;
 -- Personal best per participant within the event window, with tie breakers:
 -- higher WPM, then higher accuracy, then earlier completion.
 -- Must stay in sync with the in-memory ranking in EventService.getLeaderboard.
-CREATE OR REPLACE FUNCTION get_event_leaderboard(p_event_id UUID)
+-- Ranks participants by their best qualifying attempt in a round.
+--   p_round = 'QUALIFIER' (default): attempts made during the main event window
+--   p_round = 'FINAL': final-round attempts by the frozen finalists, inside the final window
+DROP FUNCTION IF EXISTS get_event_leaderboard(UUID);
+DROP FUNCTION IF EXISTS get_event_leaderboard(UUID, TEXT);
+CREATE OR REPLACE FUNCTION get_event_leaderboard(p_event_id UUID, p_round TEXT DEFAULT 'QUALIFIER')
 RETURNS TABLE (
     rank BIGINT,
     participant_id UUID,
@@ -95,6 +112,9 @@ RETURNS TABLE (
     best_wpm INTEGER,
     best_wpm_precise NUMERIC(6, 2),
     best_accuracy NUMERIC(5, 2),
+    best_raw_wpm NUMERIC(6, 2),
+    best_consistency NUMERIC(5, 2),
+    best_attempt_id UUID,
     attempts_count BIGINT,
     last_attempt_at TIMESTAMPTZ
 )
@@ -106,12 +126,15 @@ AS $$
             p.id AS participant_id,
             p.name,
             p.student_id,
+            a.id AS attempt_id,
             a.wpm_display AS best_wpm,
             a.wpm AS best_wpm_precise,
             a.accuracy AS best_accuracy,
+            a.raw_wpm AS best_raw_wpm,
+            a.consistency AS best_consistency,
             a.completed_at AS best_attempt_time,
             (SELECT COUNT(*) FROM attempts c
-              WHERE c.participant_id = p.id AND c.event_id = p_event_id) AS attempts_count,
+              WHERE c.participant_id = p.id AND c.event_id = p_event_id AND c.round = p_round) AS attempts_count,
             ROW_NUMBER() OVER (
                 PARTITION BY p.id
                 ORDER BY a.wpm DESC, a.accuracy DESC, a.completed_at ASC
@@ -121,9 +144,15 @@ AS $$
         JOIN events e ON e.id = p_event_id
         WHERE p.event_id = p_event_id
           AND p.disqualified = FALSE
-          -- Only attempts made during the official event window
-          AND (e.start_time IS NULL OR a.started_at >= e.start_time)
-          AND (e.end_time IS NULL OR a.completed_at <= (e.end_time + INTERVAL '5 seconds'))
+          AND a.round = p_round
+          AND (p_round <> 'FINAL' OR e.finalist_ids ? p.id::text)
+          -- Only attempts made during the round's official window
+          AND CASE WHEN p_round = 'FINAL'
+                THEN (e.final_start_time IS NULL OR a.started_at >= e.final_start_time)
+                 AND (e.final_end_time IS NULL OR a.completed_at <= (e.final_end_time + INTERVAL '5 seconds'))
+                ELSE (e.start_time IS NULL OR a.started_at >= e.start_time)
+                 AND (e.end_time IS NULL OR a.completed_at <= (e.end_time + INTERVAL '5 seconds'))
+              END
     )
     SELECT
         DENSE_RANK() OVER (ORDER BY best_wpm_precise DESC, best_accuracy DESC, best_attempt_time ASC) AS rank,
@@ -133,6 +162,9 @@ AS $$
         best_wpm,
         best_wpm_precise,
         best_accuracy,
+        best_raw_wpm,
+        best_consistency,
+        attempt_id AS best_attempt_id,
         attempts_count,
         best_attempt_time AS last_attempt_at
     FROM participant_best
@@ -146,7 +178,7 @@ INSERT INTO events (
     max_attempts, finalists_count, passage, is_demo
 ) VALUES (
     '00000000-0000-0000-0000-000000000001',
-    'Tensor MacTober Touch Type Championship ''26',
+    'Tensor School Typing Championship',
     'NOT_STARTED',
     60,
     60,

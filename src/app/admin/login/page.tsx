@@ -48,32 +48,32 @@ export default function AdminLoginPage() {
 
   return (
     <div className="flex-1 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm rounded-3xl p-8 glass-panel-glow border border-orange-500/25 shadow-apple-card relative animate-fade-in text-center">
-        <div className="w-14 h-14 rounded-2xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center text-orange-400 mx-auto mb-5 shadow-glow-orange">
+      <div className="w-full max-w-sm rounded-3xl p-8 glass-panel-glow border border-indigo-200 shadow-card relative animate-fade-in text-center">
+        <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 mx-auto mb-5 shadow-glow-indigo">
           <Shield className="w-7 h-7" />
         </div>
 
-        <h2 className="text-2xl font-black text-white tracking-tight mb-1">
-          Host Authentication
+        <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight mb-1">
+          Host sign in
         </h2>
-        <p className="text-xs text-zinc-400 mb-6">
-          Access the Tensor MacTober administrative controls
+        <p className="text-xs text-slate-500 mb-6">
+          Host controls for the Tensor School Typing Championship
         </p>
 
         {error && (
-          <div className="p-3 mb-4 rounded-xl bg-red-950/60 border border-red-500/30 text-red-300 text-xs flex items-center space-x-2 text-left">
-            <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+          <div className="p-3 mb-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center space-x-2 text-left">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
             <span>{error}</span>
           </div>
         )}
 
         <form onSubmit={handleLogin} className="space-y-4 text-left">
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+            <label className="block text-xs font-medium text-slate-600 mb-1.5">
               Admin Username
             </label>
             <div className="relative">
-              <User className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 required
@@ -82,17 +82,17 @@ export default function AdminLoginPage() {
                 placeholder="Enter admin username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/60 border border-white/10 text-white placeholder-zinc-500 text-sm focus:outline-none focus:border-orange-500 transition-colors"
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 text-sm focus:outline-none focus:border-indigo-600 transition-colors"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+            <label className="block text-xs font-medium text-slate-600 mb-1.5">
               Admin Password
             </label>
             <div className="relative">
-              <Lock className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="password"
                 required
@@ -100,7 +100,7 @@ export default function AdminLoginPage() {
                 placeholder="Enter admin password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/60 border border-white/10 text-white placeholder-zinc-500 text-sm focus:outline-none focus:border-orange-500 transition-colors"
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 text-sm focus:outline-none focus:border-indigo-600 transition-colors"
               />
             </div>
           </div>
@@ -108,9 +108,9 @@ export default function AdminLoginPage() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full py-3 rounded-xl font-bold text-black bg-gradient-to-r from-orange-500 via-amber-400 to-orange-400 hover:from-orange-400 hover:to-amber-300 transition-all text-sm shadow-glow-orange flex items-center justify-center space-x-2 disabled:opacity-50"
+            className="w-full py-3 rounded-xl font-bold text-white bg-indigo-700 hover:bg-indigo-800 transition-all text-sm shadow-glow-indigo flex items-center justify-center space-x-2 disabled:opacity-50"
           >
-            <span>{submitting ? 'Verifying...' : 'Authenticate Host'}</span>
+            <span>{submitting ? 'Verifying…' : 'Sign in'}</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>

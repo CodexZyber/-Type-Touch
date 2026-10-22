@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChampionshipEvent, Participant, TypingAttempt } from '@/types';
+import { ChampionshipEvent, Participant, TypingAttempt, RoundKind, AttemptTimelinePoint } from '@/types';
 import {
   computeAttemptMetrics,
   diffKeystrokes,
@@ -17,6 +17,8 @@ interface TypingInterfaceProps {
   participant: Participant;
   serverOffsetMs: number;
   onAttemptSubmitted?: () => void;
+  /** QUALIFIER (default) or FINAL: picks the round window, attempt quota and submission tag. */
+  round?: RoundKind;
 }
 
 export default function TypingInterface({
@@ -24,6 +26,7 @@ export default function TypingInterface({
   participant,
   serverOffsetMs,
   onAttemptSubmitted,
+  round = 'QUALIFIER',
 }: TypingInterfaceProps) {
   const [gameState, setGameState] = useState<'READY' | 'TYPING' | 'SUBMITTING' | 'RESULT'>('READY');
   const [input, setInput] = useState<string>('');
@@ -47,12 +50,31 @@ export default function TypingInterface({
   const keystrokeStatsRef = useRef<KeystrokeStats>(EMPTY_KEYSTROKE_STATS);
   const isSubmittingRef = useRef<boolean>(false);
   const tabSwitchesRef = useRef<number>(0);
+  // Per-second performance timeline (net WPM, raw burst, mistypes) for the result graph
+  const timelineRef = useRef<AttemptTimelinePoint[]>([]);
+  const lastTickRef = useRef<{ chars: number; mistypes: number }>({ chars: 0, mistypes: 0 });
+
+  const recordTimelinePoint = (t: number) => {
+    const typed = latestInputRef.current;
+    const stats = keystrokeStatsRef.current;
+    const elapsed = Math.max(1, (Date.now() - startTimeRef.current) / 1000);
+    const m = computeAttemptMetrics({ passage, typedText: typed, elapsedSeconds: elapsed, ...stats });
+    const charsNow = stats.totalKeystrokes;
+    const burstChars = Math.max(0, charsNow - lastTickRef.current.chars);
+    const errors = Math.max(0, stats.incorrectKeystrokes - lastTickRef.current.mistypes);
+    lastTickRef.current = { chars: charsNow, mistypes: stats.incorrectKeystrokes };
+    const last = timelineRef.current[timelineRef.current.length - 1];
+    if (last && last.t >= t) return;
+    timelineRef.current.push({ t, wpm: m.wpmDisplay, raw: Math.round(burstChars * 12), errors });
+  };
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const textDisplayRef = useRef<HTMLDivElement>(null);
   const finishAttemptRef = useRef<() => void>(() => {});
 
-  const passage = event.passage || 'Tensor MacTober official passage loading...';
+  // Each round has its own passage; the final's is set when the host starts it
+  const passage =
+    (round === 'FINAL' ? event.final_passage || event.passage : event.passage) || 'Loading the official passage...';
 
   // Fetch participant's historical attempt count
   const fetchUserAttempts = async () => {
@@ -60,7 +82,9 @@ export default function TypingInterface({
       const res = await fetch(`/api/participants?participantId=${participant.id}`);
       const data = await res.json();
       if (data.success && data.attempts) {
-        setUserAttemptsCount(data.attempts.length);
+        setUserAttemptsCount(
+          data.attempts.filter((a: TypingAttempt) => (a.round || 'QUALIFIER') === round).length
+        );
       }
     } catch (e) {
       // silent fallback
@@ -78,13 +102,39 @@ export default function TypingInterface({
   // Maximum allowed test duration taking into account event end time (Requirement 13)
   const calculateEffectiveTestDuration = () => {
     const baseDuration = event.test_duration || 60;
-    if (!event.end_time) return baseDuration;
+    const windowEnd = round === 'FINAL' ? event.final_end_time : event.end_time;
+    if (!windowEnd) return baseDuration;
 
     const nowServer = Date.now() + serverOffsetMs;
-    const endServer = new Date(event.end_time).getTime();
+    const endServer = new Date(windowEnd).getTime();
     const remainingEventSecs = Math.max(0, Math.floor((endServer - nowServer) / 1000));
 
     return Math.min(baseDuration, remainingEventSecs);
+  };
+
+  // Grand Final only: stream in-progress stats so spectators can watch the race live.
+  const reportProgress = (
+    state: 'TYPING' | 'DONE',
+    typed: string,
+    stats: KeystrokeStats,
+    elapsedSeconds: number
+  ) => {
+    const m = computeAttemptMetrics({ passage, typedText: typed, elapsedSeconds, ...stats });
+    fetch('/api/attempts/progress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify({
+        participantId: participant.id,
+        sessionId: participant.session_id,
+        wpm: m.wpmDisplay,
+        accuracy: m.accuracy,
+        progress: Math.min(100, Math.round((typed.length / passage.length) * 100)),
+        state,
+      }),
+    }).catch(() => {
+      // best effort: never interrupt the typist
+    });
   };
 
   // Finish Attempt & Submit to Server (Guaranteed single submission with latest state)
@@ -109,6 +159,10 @@ export default function TypingInterface({
 
     const currentTyped = latestInputRef.current;
     const stats = keystrokeStatsRef.current;
+    recordTimelinePoint(Math.max(1, Math.ceil(actualElapsedSecs)));
+    if (round === 'FINAL') {
+      reportProgress('DONE', currentTyped, stats, actualElapsedSecs);
+    }
 
     // The server recomputes WPM / accuracy from typedText + these keystroke counters.
     const payload = {
@@ -119,11 +173,13 @@ export default function TypingInterface({
       completedAt: new Date(completedServerTime).toISOString(),
       elapsedSeconds: actualElapsedSecs,
       tabSwitches: tabSwitchesRef.current,
+      round,
       passageText: passage,
       typedText: currentTyped,
       totalKeystrokes: stats.totalKeystrokes,
       incorrectKeystrokes: stats.incorrectKeystrokes,
       corrections: stats.corrections,
+      timeline: timelineRef.current,
     };
 
     try {
@@ -188,6 +244,8 @@ export default function TypingInterface({
     latestInputRef.current = '';
     keystrokeStatsRef.current = EMPTY_KEYSTROKE_STATS;
     setKeystrokeStats(EMPTY_KEYSTROKE_STATS);
+    timelineRef.current = [];
+    lastTickRef.current = { chars: 0, mistypes: 0 };
     setInput('');
     setTimeRemaining(effectiveSecs);
 
@@ -265,6 +323,30 @@ export default function TypingInterface({
     };
   }, [gameState]);
 
+  // Record one timeline point per second while typing (every round)
+  useEffect(() => {
+    if (gameState !== 'TYPING') return;
+    const interval = setInterval(() => {
+      const t = Math.round((Date.now() - startTimeRef.current) / 1000);
+      if (t >= 1) recordTimelinePoint(t);
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState]);
+
+  // Grand Final: push live progress once a second while typing
+  useEffect(() => {
+    if (round !== 'FINAL' || gameState !== 'TYPING') return;
+    const tick = () => {
+      const elapsed = Math.max(1, (Date.now() - startTimeRef.current) / 1000);
+      reportProgress('TYPING', latestInputRef.current, keystrokeStatsRef.current, elapsed);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [round, gameState]);
+
   // Anti-Cheat: Paste Interception (Requirement 17)
   const handlePaste = (e: React.ClipboardEvent) => {
     e.preventDefault();
@@ -329,21 +411,22 @@ export default function TypingInterface({
     const maxSecs = calculateEffectiveTestDuration();
 
     return (
-      <div className="w-full max-w-3xl mx-auto rounded-3xl p-10 glass-panel border border-white/10 text-center animate-fade-in shadow-apple-card">
-        <div className="w-16 h-16 rounded-2xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 mx-auto mb-5 shadow-glow-orange">
+      <div className="w-full max-w-3xl mx-auto rounded-3xl p-10 glass-panel border border-slate-200 text-center animate-fade-in shadow-card">
+        <div className="w-16 h-16 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 mx-auto mb-5 shadow-glow-indigo">
           <Flame className="w-8 h-8" />
         </div>
 
-        <h2 className="text-3xl font-extrabold text-white mb-2 tracking-tight">Ready?</h2>
-        <p className="text-sm text-zinc-400 max-w-md mx-auto mb-4">
-          The test lasts exactly <strong className="text-white">{event.test_duration || 60} seconds</strong>. All students receive the identical passage. Minimum <strong className="text-orange-400">{event.minimum_accuracy || 85}% accuracy</strong> required to qualify.
+        {round === 'FINAL' && <span className="ts-eyebrow block mb-2">Grand Final round</span>}
+        <h2 className="text-3xl font-extrabold text-slate-900 mb-2 tracking-tight">Ready?</h2>
+        <p className="text-sm text-slate-500 max-w-md mx-auto mb-4">
+          The test lasts exactly <strong className="text-slate-900">{event.test_duration || 60} seconds</strong>. {round === 'FINAL' ? 'Every finalist types the same passage; spectators watch your progress live.' : 'All students receive the identical passage.'} Minimum <strong className="text-indigo-700">{event.minimum_accuracy || 85}% accuracy</strong> required to qualify.
         </p>
-        <p className="text-xs text-zinc-500 max-w-md mx-auto mb-4">
+        <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
           WPM counts correct characters only (5 characters = 1 word). Accuracy is measured per keystroke:
           every wrong key press counts, even if you backspace and fix it.
         </p>
 
-        <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-mono text-zinc-300 mb-6">
+        <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-50 border border-slate-200 text-xs font-mono text-slate-600 mb-6">
           <span>
             {event.max_attempts
               ? `Attempts used: ${userAttemptsCount} of ${event.max_attempts}`
@@ -352,15 +435,15 @@ export default function TypingInterface({
         </div>
 
         {maxSecs < (event.test_duration || 60) && (
-          <div className="mb-6 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs inline-flex items-center space-x-2">
+          <div className="mb-6 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-600 text-xs inline-flex items-center space-x-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>Event ending soon! This attempt is capped at {maxSecs} seconds.</span>
           </div>
         )}
 
         {isMaxAttemptsReached && (
-          <div className="mb-6 p-3.5 rounded-xl bg-red-950/60 border border-red-500/30 text-red-300 text-xs flex items-center justify-center space-x-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+          <div className="mb-6 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center justify-center space-x-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
             <span>You have completed all {event.max_attempts} of your allowed attempts for this competition.</span>
           </div>
         )}
@@ -368,18 +451,18 @@ export default function TypingInterface({
         <button
           onClick={handleStartTest}
           disabled={maxSecs <= 0 || isMaxAttemptsReached}
-          className="px-10 py-4 rounded-xl font-black text-black bg-gradient-to-r from-orange-500 via-amber-400 to-orange-400 hover:from-orange-400 hover:to-amber-300 transition-all duration-200 shadow-glow-orange flex items-center justify-center space-x-2.5 mx-auto text-base disabled:opacity-40 group"
+          className="px-10 py-4 rounded-xl font-black text-white bg-indigo-700 hover:bg-indigo-800 transition-all duration-200 shadow-glow-indigo flex items-center justify-center space-x-2.5 mx-auto text-base disabled:opacity-40 group"
         >
-          <Play className="w-5 h-5 fill-black group-hover:scale-110 transition-transform" />
-          <span>{isMaxAttemptsReached ? 'ATTEMPTS EXHAUSTED' : 'START TEST'}</span>
+          <Play className="w-5 h-5 fill-white group-hover:scale-110 transition-transform" />
+          <span>{isMaxAttemptsReached ? 'No attempts left' : 'Start test'}</span>
         </button>
 
-        <div className="mt-8 pt-6 border-t border-white/5 flex items-center justify-center space-x-6 text-xs text-zinc-500 font-mono">
-          <span>Keystroke Tracked</span>
-          <span>•</span>
-          <span>Paste Blocked</span>
-          <span>•</span>
-          <span>Server Verified</span>
+        <div className="mt-8 pt-6 border-t border-slate-200 flex items-center justify-center space-x-6 text-xs text-slate-500 font-mono">
+          <span>Keystrokes tracked</span>
+          <span>·</span>
+          <span>Paste blocked</span>
+          <span>·</span>
+          <span>Server verified</span>
         </div>
       </div>
     );
@@ -407,10 +490,10 @@ export default function TypingInterface({
   // Render Submitting / Processing State
   if (gameState === 'SUBMITTING') {
     return (
-      <div className="w-full max-w-xl mx-auto rounded-3xl p-12 glass-panel border border-white/10 text-center animate-fade-in">
-        <div className="w-12 h-12 rounded-full border-2 border-orange-500 border-t-transparent animate-spin mx-auto mb-4" />
-        <h3 className="text-xl font-bold text-white mb-1">Calculating Result...</h3>
-        <p className="text-xs text-zinc-400">Verifying typing accuracy and server timestamps</p>
+      <div className="w-full max-w-xl mx-auto rounded-3xl p-12 glass-panel border border-slate-200 text-center animate-fade-in">
+        <div className="w-12 h-12 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin mx-auto mb-4" />
+        <h3 className="text-xl font-bold text-slate-900 mb-1">Scoring your attempt…</h3>
+        <p className="text-xs text-slate-500">Verifying typing accuracy and server timestamps</p>
       </div>
     );
   }
@@ -419,16 +502,16 @@ export default function TypingInterface({
   return (
     <div className="w-full max-w-4xl mx-auto space-y-4 animate-fade-in">
       {/* Live Metrics HUD */}
-      <div className="grid grid-cols-4 gap-3 p-4 rounded-2xl glass-panel border border-white/10">
+      <div className="grid grid-cols-4 gap-3 p-4 rounded-2xl glass-panel border border-slate-200">
         <div className="flex items-center space-x-3 px-3 py-1.5">
-          <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center text-orange-400">
+          <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700">
             <Timer className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-[10px] font-mono uppercase text-zinc-400">Time Left</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Time Left</div>
             <div
               className={`text-xl font-black font-mono tracking-tight ${
-                timeRemaining <= 10 ? 'text-red-400 animate-pulse' : 'text-white'
+                timeRemaining <= 10 ? 'text-red-600 animate-pulse' : 'text-slate-900'
               }`}
             >
               {formatDuration(timeRemaining)}
@@ -436,25 +519,25 @@ export default function TypingInterface({
           </div>
         </div>
 
-        <div className="flex items-center space-x-3 px-3 py-1.5 border-l border-white/10">
-          <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+        <div className="flex items-center space-x-3 px-3 py-1.5 border-l border-slate-200">
+          <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
             <Flame className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-[10px] font-mono uppercase text-zinc-400">Live WPM</div>
-            <div className="text-xl font-black font-mono text-white tracking-tight">{liveWpm}</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Live WPM</div>
+            <div className="text-xl font-black font-mono text-slate-900 tracking-tight">{liveWpm}</div>
           </div>
         </div>
 
-        <div className="flex items-center space-x-3 px-3 py-1.5 border-l border-white/10">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+        <div className="flex items-center space-x-3 px-3 py-1.5 border-l border-slate-200">
+          <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
             <Target className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-[10px] font-mono uppercase text-zinc-400">Accuracy</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Accuracy</div>
             <div
               className={`text-xl font-black font-mono tracking-tight ${
-                liveAcc >= (event.minimum_accuracy || 85) ? 'text-white' : 'text-red-400'
+                liveAcc >= (event.minimum_accuracy || 85) ? 'text-slate-900' : 'text-red-600'
               }`}
             >
               {keystrokeStats.totalKeystrokes === 0 ? '100' : liveAcc}%
@@ -462,13 +545,13 @@ export default function TypingInterface({
           </div>
         </div>
 
-        <div className="flex items-center space-x-3 px-3 py-1.5 border-l border-white/10">
-          <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+        <div className="flex items-center space-x-3 px-3 py-1.5 border-l border-slate-200">
+          <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-700">
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-[10px] font-mono uppercase text-zinc-400">Progress</div>
-            <div className="text-xl font-black font-mono text-white tracking-tight">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Progress</div>
+            <div className="text-xl font-black font-mono text-slate-900 tracking-tight">
               {Math.min(100, Math.round((input.length / passage.length) * 100))}%
             </div>
           </div>
@@ -477,8 +560,8 @@ export default function TypingInterface({
 
       {/* Paste / Anti-Cheat Warning Banner */}
       {pasteWarning && (
-        <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-300 text-xs flex items-center space-x-2 animate-fade-in shadow-lg">
-          <ShieldAlert className="w-4 h-4 shrink-0 text-red-400" />
+        <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center space-x-2 animate-fade-in shadow-lg">
+          <ShieldAlert className="w-4 h-4 shrink-0 text-red-600" />
           <span className="font-medium">{pasteWarning}</span>
         </div>
       )}
@@ -488,22 +571,22 @@ export default function TypingInterface({
         ref={textDisplayRef}
         onCopy={handleCopyPassage}
         onClick={() => inputRef.current?.focus()}
-        className="relative min-h-[220px] max-h-[300px] overflow-y-auto p-7 rounded-2xl glass-panel border border-white/15 cursor-text select-none text-lg sm:text-xl leading-relaxed tracking-wide font-mono transition-all"
+        className="relative min-h-[220px] max-h-[300px] overflow-y-auto p-7 rounded-2xl glass-panel border border-slate-200 cursor-text select-none text-lg sm:text-xl leading-relaxed tracking-wide font-mono transition-all"
       >
         {passage.split('').map((char, index) => {
-          let charClass = 'text-zinc-500'; // Default untyped
+          let charClass = 'text-slate-500'; // Default untyped
           const isTyped = index < input.length;
           const isCurrent = index === input.length;
 
           if (isTyped) {
             const isCorrect = input[index] === char;
-            charClass = isCorrect ? 'text-white font-medium' : 'text-red-400 bg-red-900/40 underline';
+            charClass = isCorrect ? 'text-slate-900 font-medium' : 'text-red-600 bg-red-100 underline';
           }
 
           return (
             <span
               key={index}
-              className={`${charClass} ${isCurrent ? 'active-char relative bg-orange-500/20 text-orange-300 border-b-2 border-orange-400 font-bold' : ''}`}
+              className={`${charClass} ${isCurrent ? 'active-char relative bg-indigo-100 text-indigo-700 border-b-2 border-indigo-600 font-bold' : ''}`}
             >
               {char}
             </span>
@@ -524,13 +607,13 @@ export default function TypingInterface({
           spellCheck="false"
           placeholder="Start typing the passage here..."
           rows={2}
-          className="w-full px-5 py-3.5 rounded-xl bg-black/60 border border-white/15 text-white font-mono text-base placeholder-zinc-600 focus:outline-none focus:border-orange-500 transition-colors resize-none shadow-inner"
+          className="w-full px-5 py-3.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 font-mono text-base placeholder-slate-400 focus:outline-none focus:border-indigo-600 transition-colors resize-none shadow-inner"
         />
-        <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono mt-1 px-1">
+        <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono mt-1 px-1">
           <span>Click to focus • Input is auto-locked at {event.test_duration || 60} seconds</span>
           <span>
             Raw {liveMetrics.rawWpm.toFixed(0)} WPM •{' '}
-            <span className={keystrokeStats.incorrectKeystrokes > 0 ? 'text-red-400' : ''}>
+            <span className={keystrokeStats.incorrectKeystrokes > 0 ? 'text-red-600' : ''}>
               {keystrokeStats.incorrectKeystrokes} mistypes
             </span>{' '}
             • {keystrokeStats.corrections} corrected • {input.length} / {passage.length}
