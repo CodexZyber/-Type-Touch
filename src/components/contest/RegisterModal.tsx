@@ -2,10 +2,8 @@
 
 import React, { useState } from 'react';
 import { Participant } from '@/types';
-import { PARTICIPANT_STORAGE_KEY } from '@/lib/utils/participant-session';
+import { PARTICIPANT_STORAGE_KEY, PARTICIPANT_CHANGED_EVENT } from '@/lib/utils/participant-session';
 import { AlertCircle, ArrowRight, X } from 'lucide-react';
-
-const SESSION_STORAGE_KEY = 'tensor_mactober_session_id';
 
 interface RegisterModalProps {
   eventId?: string;
@@ -14,50 +12,41 @@ interface RegisterModalProps {
 }
 
 /**
- * Minimal candidate sign-in: name + student ID. No password; the participant
- * record is stored in the browser and re-validated against the server.
+ * Candidate sign-in with the username + password the host issued. The returned
+ * participant record (including its session id) is stored in the browser and
+ * re-validated against the server.
  */
 export default function RegisterModal({ eventId, onRegistered, onClose }: RegisterModalProps) {
-  const [name, setName] = useState('');
-  const [studentId, setStudentId] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !studentId.trim()) {
-      setError('Please enter your full name and student ID.');
+    if (!username.trim() || !password) {
+      setError('Please enter your username and password.');
       return;
     }
 
     setSubmitting(true);
     setError(null);
     try {
-      let sessionId = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (!sessionId) {
-        sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
-      }
-
       const res = await fetch('/api/participants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          eventId,
-          name: name.trim(),
-          studentId: studentId.trim(),
-          sessionId,
-        }),
+        body: JSON.stringify({ username: username.trim(), password }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Registration failed');
+        throw new Error(data.error || 'Sign-in failed');
       }
 
       localStorage.setItem(PARTICIPANT_STORAGE_KEY, JSON.stringify(data.participant));
+      window.dispatchEvent(new Event(PARTICIPANT_CHANGED_EVENT));
       onRegistered(data.participant);
     } catch (err: any) {
-      setError(err.message || 'Registration failed. Please try again.');
+      setError(err.message || 'Sign-in failed. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -78,7 +67,7 @@ export default function RegisterModal({ eventId, onRegistered, onClose }: Regist
 
         <span className="ts-eyebrow block mb-2">Enter the contest</span>
         <h3 className="text-xl font-bold text-slate-900 mb-1">Who&apos;s typing?</h3>
-        <p className="text-sm text-slate-500 mb-5">Your scores are tracked by student ID.</p>
+        <p className="text-sm text-slate-500 mb-5">Sign in with the username and password from your host.</p>
 
         {error && (
           <div className="p-3 mb-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-start gap-2">
@@ -89,44 +78,45 @@ export default function RegisterModal({ eventId, onRegistered, onClose }: Regist
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="ts-label" htmlFor="reg-name">
-              Full name
+            <label className="ts-label" htmlFor="reg-username">
+              Username
             </label>
             <input
-              id="reg-name"
+              id="reg-username"
               type="text"
               required
               autoFocus
-              autoComplete="name"
-              placeholder="e.g. Arya Sovakar"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="ts-input"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="e.g. aarav"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="ts-input font-mono"
             />
           </div>
 
           <div>
-            <label className="ts-label" htmlFor="reg-student-id">
-              Student ID
+            <label className="ts-label" htmlFor="reg-password">
+              Password
             </label>
             <input
-              id="reg-student-id"
-              type="text"
+              id="reg-password"
+              type="password"
               required
-              autoComplete="off"
-              placeholder="e.g. TS-101"
-              value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
-              className="ts-input font-mono uppercase"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="ts-input font-mono"
             />
           </div>
 
           <button type="submit" disabled={submitting} className="btn-primary w-full">
-            <span>{submitting ? 'Joining…' : 'Enter Contest Arena'}</span>
+            <span>{submitting ? 'Signing in…' : 'Enter Contest Arena'}</span>
             <ArrowRight className="w-4 h-4" />
           </button>
           <p className="text-[11px] text-center text-slate-400">
-            No password needed. Your session is saved on this device.
+            Signing in here signs you out on any other device.
           </p>
         </form>
       </div>

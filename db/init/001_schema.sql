@@ -40,12 +40,23 @@ CREATE TABLE IF NOT EXISTS participants (
     name TEXT NOT NULL,
     student_id TEXT NOT NULL,
     email TEXT,
+    section TEXT,                  -- class section for host-created students; informational
     session_id TEXT NOT NULL,
     disqualified BOOLEAN NOT NULL DEFAULT FALSE,
     disqualification_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_event_student UNIQUE (event_id, student_id)
 );
+
+-- 2b. STUDENT ACCOUNTS (only host-created students can sign in; see scripts/students-add.mjs)
+-- Kept apart from participants so no participant query can ever return a password hash.
+CREATE TABLE IF NOT EXISTS student_accounts (
+    participant_id UUID PRIMARY KEY REFERENCES participants(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    password_hash TEXT NOT NULL,   -- scrypt$N=16384,r=8,p=1$<saltHex>$<keyHex>
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_student_accounts_username ON student_accounts (lower(username));
 
 -- 3. ATTEMPTS TABLE
 CREATE TABLE IF NOT EXISTS attempts (

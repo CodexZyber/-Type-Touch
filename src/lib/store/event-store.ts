@@ -11,6 +11,8 @@ import {
 import { computeAttemptMetrics, isQualifiedAttempt, sanitizeTimeline, calculateConsistency } from '@/lib/utils/typing';
 import { pickPassage } from '@/lib/passages';
 import { getPool, isUuid } from '@/lib/db/postgres';
+import { verifyPassword } from '@/lib/auth/admin-auth';
+import crypto from 'node:crypto';
 import { notifyChange, clearProgress, getProgress } from '@/lib/realtime/live';
 
 // Initial Official Passage for the Tensor School Typing Championship
@@ -25,6 +27,8 @@ class MemoryDataStore {
   event: ChampionshipEvent;
   participants: Map<string, Participant> = new Map();
   attempts: TypingAttempt[] = [];
+  /** Student logins keyed by lower-cased username (mirrors the student_accounts table) */
+  accounts: Map<string, { participant_id: string; password_hash: string }> = new Map();
 
   constructor() {
     this.event = {
@@ -657,6 +661,64 @@ export class EventService {
   }
 
   /**
+   * Signs a host-created student in. Each sign-in issues a fresh session id, so the
+   * student's previous device is signed out and only the new session can submit.
+   * Returns null for an unknown username or wrong password (callers don't say which).
+   */
+  static async loginStudent(username: string, password: string): Promise<Participant | null> {
+    const event = await this.getActiveEvent();
+    const key = username.trim().toLowerCase();
+    const sessionId = `sess_${crypto.randomBytes(16).toString('hex')}`;
+
+    const pool = getPool();
+    if (pool) {
+      const { rows } = await pool.query<{ participant_id: string; password_hash: string }>(
+        `SELECT sa.participant_id, sa.password_hash
+         FROM student_accounts sa
+         JOIN participants p ON p.id = sa.participant_id
+         WHERE lower(sa.username) = $1 AND p.event_id = $2`,
+        [key, event.id]
+      );
+      const account = rows[0];
+      if (!account || !verifyPassword(password, account.password_hash)) return null;
+
+      const updated = await pool.query<Participant>(
+        'UPDATE participants SET session_id = $2 WHERE id = $1 RETURNING *',
+        [account.participant_id, sessionId]
+      );
+      return updated.rows[0] || null;
+    }
+
+    const account = memoryStore.accounts.get(key);
+    const participant = account && memoryStore.participants.get(account.participant_id);
+    if (!account || !participant || participant.event_id !== event.id) return null;
+    if (!verifyPassword(password, account.password_hash)) return null;
+    participant.session_id = sessionId;
+    return participant;
+  }
+
+  /**
+   * Signs a student out by retiring their session id, so the old session can no longer
+   * submit or report progress. A stale/mismatched session is a no-op.
+   */
+  static async logoutStudent(participantId: string, sessionId: string): Promise<void> {
+    const retired = `sess_${crypto.randomBytes(16).toString('hex')}`;
+    const pool = getPool();
+    if (pool) {
+      if (!isUuid(participantId)) return;
+      await pool.query('UPDATE participants SET session_id = $3 WHERE id = $1 AND session_id = $2', [
+        participantId,
+        sessionId,
+        retired,
+      ]);
+      return;
+    }
+
+    const participant = memoryStore.participants.get(participantId);
+    if (participant && participant.session_id === sessionId) participant.session_id = retired;
+  }
+
+  /**
    * Submits a typing attempt with strict server-side validation and anti-cheat
    */
   static async submitAttempt(payload: SubmissionPayload): Promise<{
@@ -671,6 +733,12 @@ export class EventService {
     const event = await this.getActiveEvent();
     const now = new Date();
     const round: RoundKind = payload.round === 'FINAL' ? 'FINAL' : 'QUALIFIER';
+
+    // 0. Only the signed-in session may submit (participant ids are public on the leaderboard)
+    const participant = await this.getParticipant(payload.participantId);
+    if (!participant || !payload.sessionId || participant.session_id !== payload.sessionId) {
+      throw new Error('Your session has expired or you signed in elsewhere. Please sign in again.');
+    }
 
     // 1. Validate round status
     if (round === 'FINAL') {

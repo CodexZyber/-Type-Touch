@@ -45,6 +45,7 @@ export interface Participant {
   name: string;
   student_id: string;
   email?: string | null;
+  section?: string | null;
   session_id: string;
   disqualified: boolean;
   disqualification_reason?: string | null;

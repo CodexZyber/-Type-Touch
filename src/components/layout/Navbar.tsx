@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChampionshipEvent, Participant } from '@/types';
 import { getEventTimerInfo } from '@/lib/utils/timer';
-import { PARTICIPANT_STORAGE_KEY } from '@/lib/utils/participant-session';
-import { Keyboard, Trophy, UserRound, Crown } from 'lucide-react';
+import { PARTICIPANT_STORAGE_KEY, PARTICIPANT_CHANGED_EVENT, logoutParticipant } from '@/lib/utils/participant-session';
+import { Keyboard, Trophy, UserRound, Crown, LogOut } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -18,14 +18,29 @@ export default function Navbar() {
   // The host dashboard has its own chrome; keep the candidate nav out of it.
   const isAdmin = pathname?.startsWith('/admin');
 
+  const [loggingOut, setLoggingOut] = useState(false);
+
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(PARTICIPANT_STORAGE_KEY);
-      setParticipant(stored ? JSON.parse(stored) : null);
-    } catch (e) {
-      setParticipant(null);
-    }
+    const load = () => {
+      try {
+        const stored = localStorage.getItem(PARTICIPANT_STORAGE_KEY);
+        setParticipant(stored ? JSON.parse(stored) : null);
+      } catch (e) {
+        setParticipant(null);
+      }
+    };
+    load();
+    // Sign-in happens in a modal without navigating
+    window.addEventListener(PARTICIPANT_CHANGED_EVENT, load);
+    return () => window.removeEventListener(PARTICIPANT_CHANGED_EVENT, load);
   }, [pathname]);
+
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    if (!window.confirm('Log out? Any attempt in progress will be lost.')) return;
+    setLoggingOut(true);
+    await logoutParticipant();
+  };
 
   const refreshEvent = async () => {
     try {
@@ -167,6 +182,19 @@ export default function Navbar() {
               <span className="font-semibold text-slate-800 max-w-[120px] truncate">{participant.name}</span>
               <span className="font-mono text-slate-500">{participant.student_id}</span>
             </div>
+          )}
+
+          {!isAdmin && participant && (
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              title="Log out"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 border border-slate-200 hover:text-red-700 hover:border-red-200 hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{loggingOut ? 'Logging out…' : 'Log out'}</span>
+            </button>
           )}
         </div>
       </div>
